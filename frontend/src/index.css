@@ -1,0 +1,101 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: linear-gradient(145deg, #f8faff 0%, #eef2ff 40%, #e0f2fe 100%);
+    min-height: 100vh;
+    color: #1e293b;
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  /* ─── Glass card — light version ─── */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 8px 32px rgba(99, 102, 241, 0.08);
+  }
+
+  /* ─── Elevated glass card ─── */
+  .glass-elevated {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(32px);
+    -webkit-backdrop-filter: blur(32px);
+    border: 1px solid rgba(255, 255, 255, 0.95);
+    border-radius: 2rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06), 0 24px 64px rgba(99, 102, 241, 0.1);
+  }
+
+  /* ─── Chat bubble — user ─── */
+  .bubble-user {
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
+    color: white;
+    border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+  }
+
+  /* ─── Chat bubble — AIRA ─── */
+  .bubble-aira {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(241, 245, 249, 1);
+    color: #1e293b;
+    border-radius: 1.25rem 1.25rem 1.25rem 0.25rem;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  }
+}
+
+@layer utilities {
+  .flex-center {
+    @apply flex items-center justify-center;
+  }
+  
+  /* Mesh gradient blobs */
+  .blob {
+    filter: blur(80px);
+    opacity: 0.4;
+    border-radius: 50%;
+    position: absolute;
+    pointer-events: none;
+  }
+}
+
+/* ─── Custom scrollbar — minimal ─── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.4);
+}
+
+/* ─── Selection color ─── */
+::selection {
+  background: rgba(99, 102, 241, 0.15);
+  color: #4f46e5;
+}
