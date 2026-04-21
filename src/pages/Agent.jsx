@@ -80,6 +80,7 @@ export default function Agent({ user }) {
 
   const messageHistoryRef = useRef([]);
   const greetedRef = useRef(false);
+  const pendingGreetingRef = useRef(null); // New: Stores greeting until interaction
   const hasShownScoreRef = useRef(false);
   const userName = user?.displayName?.split(" ")[0] || "there";
 
@@ -165,7 +166,14 @@ export default function Agent({ user }) {
   }, [user?.uid]);
 
   const handleUserSpeak = useCallback(async (transcript) => {
-    voice.unlock(); // Always attempt to unlock on user action
+    voice.unlock(); 
+    
+    // If there's a pending greeting that hasn't been spoken yet, play it now
+    if (pendingGreetingRef.current) {
+      voice.speak(pendingGreetingRef.current);
+      pendingGreetingRef.current = null;
+    }
+
     addMessage("user", transcript);
     messageHistoryRef.current.push({ role: "user", content: transcript });
     voice.setThinking();
@@ -380,20 +388,13 @@ export default function Agent({ user }) {
     greetedRef.current = true;
 
     const greeting = pickGreeting(userName);
+    addMessage("aira", greeting);
+    
+    // Store it to speak on first interaction (avoid auto-play block)
+    pendingGreetingRef.current = greeting;
 
-    // Auto-speak on load — no click required.
-    // We use a short timeout + requestAnimationFrame to ensure:
-    //   (a) speech synthesis voices are loaded
-    //   (b) the component is fully mounted and visible
-    const t = window.setTimeout(() =>
-      requestAnimationFrame(() => {
-        addMessage("aira", greeting);
-        if (window.speechSynthesis?.paused) window.speechSynthesis.resume();
-        voice.speak(greeting);
-      }), 900); // 900ms gives browser time to load voices
-
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Optional: Small hint that interaction is needed
+    console.log("👋 Greeting ready. Interact to hear AIRA.");
   }, [userName]);
 
   const handleDisconnect = () => {
@@ -601,7 +602,14 @@ export default function Agent({ user }) {
             <VoiceOrb
               state={voice.state}
               thinkingMessage={voice.thinkingMessage}
-              toggleListening={voice.toggleOrb}
+              toggleListening={() => {
+                voice.unlock();
+                if (pendingGreetingRef.current) {
+                  voice.speak(pendingGreetingRef.current);
+                  pendingGreetingRef.current = null;
+                }
+                voice.toggleOrb();
+              }}
             />
           </div>
         </div>
