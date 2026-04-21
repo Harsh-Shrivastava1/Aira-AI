@@ -38,10 +38,10 @@ const DEV_REPLY =
 
 /* Greeting pool — picked randomly on each session */
 const GREETINGS = (name) => [
-  `Hey ${name}! Great to see you — I'm AIRA, your personal AI companion. I can help you practice interviews, tackle tasks, answer questions, or just have a real conversation. What are we doing today?`,
-  `Hey ${name}! I'm AIRA and I'm ready to go. Whether you want to prep for an interview, get help with something, or just chat — I've got you. What's on your mind?`,
-  `${name}! Good to have you here. I'm AIRA — think of me as your smart assistant and conversation partner rolled into one. We can practice scenarios, work through problems, or just talk. So, what do you wanna do?`,
-  `Hey ${name}! I'm AIRA, and honestly, I've been waiting to chat. I can help with interviews, emails, decisions, learning — pretty much anything. Where do you want to start?`,
+  `Hey ${name}! I'm AIRA. Harsh built me to help you tackle tasks, practice interviews, or just chat. What's on your mind?`,
+  `Good to see you, ${name}! I'm AIRA, your smart assistant. Whether it's code, documents, or just a conversation—I'm ready when you are.`,
+  `Hey ${name}, I'm AIRA. I've been refining my skills and I'm ready to help with whatever you need. Where should we start?`,
+  `Welcome back, ${name}! I'm AIRA. Let's make some progress today. What can I do for you?`,
 ];
 function pickGreeting(name) {
   const pool = GREETINGS(name);
