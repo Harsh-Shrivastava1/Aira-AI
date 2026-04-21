@@ -1,4 +1,5 @@
 import { db, auth } from "@/config/firebase";
+import { API_BASE } from "../config/api";
 import {
   collection,
   addDoc,
