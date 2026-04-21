@@ -28,9 +28,16 @@ NO-GO LIST:
 - Do NOT say "How can I assist you today?" repeatedly.
 - Do NOT be overly formal or robotic.`;
 
+    const sanitizedHistory = (messageHistory || [])
+      .slice(-12)
+      .map(m => ({
+        role: m.role === "aira" ? "assistant" : m.role, // ensure 'aira' is mapped to 'assistant'
+        content: m.content
+      }));
+
     const messages = [
       { role: "system", content: systemPrompt },
-      ...(messageHistory || []).slice(-10), 
+      ...sanitizedHistory,
     ];
 
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
