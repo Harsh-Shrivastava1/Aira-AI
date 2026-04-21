@@ -1,7 +1,8 @@
 export default async function handler(req, res) {
+  console.log("Request Method:", req.method);
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+      return res.status(405).json({ error: "Method not allowed. Received: " + req.method });
     }
 
     const { message } = req.body;
