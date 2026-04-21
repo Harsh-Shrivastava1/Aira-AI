@@ -18,20 +18,21 @@ export function useVoice(onUserSpeak) {
   // Pick the best available voice
   const getVoice = useCallback(() => {
     const voices = synthRef.current.getVoices();
+    if (voices.length === 0) return null;
+
     const preferred = [
       "Google US English",
       "Microsoft Aria",
       "Microsoft Zira",
       "Samantha",
       "Karen",
-      "Moira",
-      "Tessa",
+      "Victoria",
     ];
     for (const name of preferred) {
       const found = voices.find((v) => v.name.includes(name));
       if (found) return found;
     }
-    return voices.find((v) => v.lang === "en-US") || voices[0] || null;
+    return voices.find((v) => v.lang.startsWith("en")) || voices[0] || null;
   }, []);
 
   // Initialize speech recognition once
@@ -159,40 +160,66 @@ export function useVoice(onUserSpeak) {
   const speak = useCallback((text, onEnd) => {
     if (!text) return;
 
+    // 1. Clean up and prevent overlap
     synthRef.current.cancel();
     shouldRestartRef.current = false;
     try { recognitionRef.current?.stop(); } catch (_) {}
 
+    // 2. Prepare text (trim and chunk if too long to prevent freezing)
+    const cleanText = text.replace(/[*_#`]/g, "").trim();
+    if (!cleanText) return;
+
+    // 3. Sync UI State
     setState("speaking");
 
-    setTimeout(() => {
-      const utterance = new SpeechSynthesisUtterance(text);
+    // 4. Execution with small safety delay
+    const executeSpeak = (retryCount = 0) => {
+      const utterance = new SpeechSynthesisUtterance(cleanText);
       const voice = getVoice();
       if (voice) utterance.voice = voice;
 
-      utterance.rate   = 1.05;  // natural, slightly brisk
-      utterance.pitch  = 1.1;   // warmer / friendlier
+      utterance.rate = 1.05;
+      utterance.pitch = 1.05;
       utterance.volume = 1.0;
+
+      utterance.onstart = () => {
+        setState("speaking");
+      };
 
       utterance.onend = () => {
         setState("idle");
         if (onEnd) onEnd();
-        // Auto-resume listening after speaking (unless user manually paused)
+        // Auto-resume listening if not manually paused
         if (!pausedByUserRef.current) {
-          startListening();
+          setTimeout(() => startListening(), 400); // Small gap between speaking and listening
         }
       };
 
       utterance.onerror = (e) => {
         if (e.error === "interrupted" || e.error === "canceled") return;
         console.warn("Speech synthesis error:", e.error);
-        setState("idle");
-        if (!pausedByUserRef.current) startListening();
+        
+        if (retryCount < 1) {
+          console.log("Retrying speech...");
+          setTimeout(() => executeSpeak(retryCount + 1), 200);
+        } else {
+          setState("idle");
+          if (!pausedByUserRef.current) startListening();
+        }
       };
 
       synthRef.current.speak(utterance);
-    }, 80);
-  }, [getVoice, startListening]);
+    };
+
+    // Ensure voices are loaded or wait a tiny bit
+    if (synthRef.current.getVoices().length === 0) {
+      window.speechSynthesis.onvoiceschanged = () => executeSpeak();
+      // Safety timeout if voiceschanged doesn't fire
+      setTimeout(() => { if (state !== "speaking") executeSpeak(); }, 500);
+    } else {
+      setTimeout(() => executeSpeak(), 150);
+    }
+  }, [getVoice, startListening, state]);
 
   const setThinking = useCallback((message = "") => {
     shouldRestartRef.current = false;

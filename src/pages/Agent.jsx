@@ -286,12 +286,15 @@ export default function Agent({ user }) {
         hasShownScoreRef.current = false;
       }
 
-      voice.speak(reply, async () => {
-        if (data.intent === "end_session" || data.intent === "evaluate") {
-          const scenario = currentScenario || data.scenario || "General Practice";
-          await handleEvaluate(scenario);
-        }
-      });
+      // 300ms delay before speaking for natural pacing
+      setTimeout(() => {
+        voice.speak(reply, async () => {
+          if (data.intent === "end_session" || data.intent === "evaluate") {
+            const scenario = currentScenario || data.scenario || "General Practice";
+            await handleEvaluate(scenario);
+          }
+        });
+      }, 300);
     } catch (err) {
       console.error("Chat error:", err);
       const errMsg = "Oops, I couldn't reach the server. Check your connection?";
