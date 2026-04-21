@@ -384,7 +384,7 @@ export default function Agent({ user }) {
   const voice = useVoice(handleUserSpeak);
 
   useEffect(() => {
-    if (greetedRef.current) return;
+    if (!user || greetedRef.current) return;
     greetedRef.current = true;
 
     const greeting = pickGreeting(userName);
@@ -392,10 +392,7 @@ export default function Agent({ user }) {
     
     // Store it to speak on first interaction (avoid auto-play block)
     pendingGreetingRef.current = greeting;
-
-    // Optional: Small hint that interaction is needed
-    console.log("👋 Greeting ready. Interact to hear AIRA.");
-  }, [userName]);
+  }, [user, userName]);
 
   const handleDisconnect = () => {
     voice.stopListening();
