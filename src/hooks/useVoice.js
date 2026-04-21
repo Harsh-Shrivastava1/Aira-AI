@@ -8,7 +8,8 @@ export function useVoice(onUserSpeak) {
   const isListeningRef   = useRef(false);
   const shouldRestartRef = useRef(false);
   const onUserSpeakRef   = useRef(onUserSpeak);
-  const pausedByUserRef  = useRef(false); // tracks manual orb-tap pause
+  const pausedByUserRef  = useRef(false);
+  const isSpeechUnlocked = useRef(false); // New: Tracks browser audio permission
 
   // Keep callback ref fresh without causing re-renders
   useEffect(() => {
@@ -131,6 +132,14 @@ export function useVoice(onUserSpeak) {
    *  • If idle / thinking    → start listening
    */
   const toggleOrb = useCallback(() => {
+    // UNLOCK speech on first user interaction
+    if (!isSpeechUnlocked.current) {
+      const u = new SpeechSynthesisUtterance("");
+      synthRef.current.speak(u);
+      isSpeechUnlocked.current = true;
+      console.log("🔊 Speech System Unlocked via Interaction");
+    }
+
     if (synthRef.current.speaking) {
       // User tapped while AIRA speaks → interrupt + listen
       synthRef.current.cancel();
@@ -158,7 +167,10 @@ export function useVoice(onUserSpeak) {
   }, []);
 
   const speak = useCallback((text, onEnd) => {
-    if (!text) return;
+    if (!text || !isSpeechUnlocked.current) {
+      if (!isSpeechUnlocked.current) console.warn("🔇 Speech Blocked: Interaction required.");
+      return;
+    }
 
     // 1. Clean up and prevent overlap
     synthRef.current.cancel();
@@ -221,12 +233,14 @@ export function useVoice(onUserSpeak) {
     }
   }, [getVoice, startListening, state]);
 
-  const setThinking = useCallback((message = "") => {
-    shouldRestartRef.current = false;
-    try { recognitionRef.current?.stop(); } catch (_) {}
-    setThinkingMessage(message);
-    setState("thinking");
+  const unlock = useCallback(() => {
+    if (!isSpeechUnlocked.current) {
+      const u = new SpeechSynthesisUtterance("");
+      synthRef.current.speak(u);
+      isSpeechUnlocked.current = true;
+      console.log("🔊 Speech System Unlocked");
+    }
   }, []);
 
-  return { state, thinkingMessage, startListening, stopListening, toggleOrb, speak, setThinking };
+  return { state, thinkingMessage, startListening, stopListening, toggleOrb, speak, setThinking, unlock };
 }

@@ -165,6 +165,7 @@ export default function Agent({ user }) {
   }, [user?.uid]);
 
   const handleUserSpeak = useCallback(async (transcript) => {
+    voice.unlock(); // Always attempt to unlock on user action
     addMessage("user", transcript);
     messageHistoryRef.current.push({ role: "user", content: transcript });
     voice.setThinking();
