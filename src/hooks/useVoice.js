@@ -22,17 +22,16 @@ export function useVoice(onUserSpeak) {
     if (voices.length === 0) return null;
 
     const preferred = [
-      "Google UK English Female",
-      "Microsoft Aria Online",
       "Google US English",
+      "Microsoft Aria",
       "Microsoft Zira",
       "Samantha",
+      "Karen",
       "Victoria",
     ];
     for (const name of preferred) {
       const found = voices.find((v) => v.name.includes(name));
       if (found) {
-        console.log("🎙️ Selecting Voice:", found.name);
         return found;
       }
     }
@@ -193,8 +192,8 @@ export function useVoice(onUserSpeak) {
       const voice = getVoice();
       if (voice) utterance.voice = voice;
 
-      utterance.rate = 0.95;  // Slightly slower for a calm, natural feel
-      utterance.pitch = 1.15; // Slightly higher for a warmer, friendlier tone
+      utterance.rate = 1.05;  // natural, slightly brisk
+      utterance.pitch = 1.1;   // warmer / friendlier
       utterance.volume = 1.0;
 
       utterance.onstart = () => {
