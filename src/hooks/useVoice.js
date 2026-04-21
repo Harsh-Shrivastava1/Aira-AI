@@ -192,8 +192,8 @@ export function useVoice(onUserSpeak) {
       const voice = getVoice();
       if (voice) utterance.voice = voice;
 
-      utterance.rate = 1.05;  // natural, slightly brisk
-      utterance.pitch = 1.1;   // warmer / friendlier
+      utterance.rate = 0.9;  // Professional, steady pace
+      utterance.pitch = 1.15; // Friendly, warm tone
       utterance.volume = 1.0;
 
       utterance.onstart = () => {

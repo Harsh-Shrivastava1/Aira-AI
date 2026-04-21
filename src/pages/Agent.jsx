@@ -78,6 +78,8 @@ export default function Agent({ user }) {
   const [chatId, setChatId] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false); // New: Tracks if sequence has run
+  const [showActivation, setShowActivation] = useState(true); // New: Activation overlay state
 
   const messageHistoryRef = useRef([]);
   const greetedRef = useRef(false);
@@ -384,16 +386,33 @@ export default function Agent({ user }) {
 
   const voice = useVoice(handleUserSpeak);
 
+  // Sequential Auto-Activation Logic
+  const handleActivation = useCallback(() => {
+    if (hasStarted) return;
+    setHasStarted(true);
+    setShowActivation(false);
+    
+    // Step 1: Unlock and Greeting
+    voice.unlock();
+    const greeting = pickGreeting(userName);
+    addMessage("aira", greeting);
+
+    // Step 2: Speak then start listening automatically
+    setTimeout(() => {
+      voice.speak(greeting, () => {
+        // Step 3: Auto-start listening after greeting finishes
+        setTimeout(() => {
+          voice.startListening();
+        }, 400); 
+      });
+    }, 300);
+  }, [hasStarted, userName, voice, addMessage]);
+
   useEffect(() => {
     if (!user || greetedRef.current) return;
     greetedRef.current = true;
-
-    const greeting = pickGreeting(userName);
-    addMessage("aira", greeting);
-    
-    // Store it to speak on first interaction (avoid auto-play block)
-    pendingGreetingRef.current = greeting;
-  }, [user, userName]);
+    // We just mark it ready, activation handles the rest
+  }, [user]);
 
   const handleDisconnect = () => {
     voice.stopListening();
@@ -556,6 +575,42 @@ export default function Agent({ user }) {
           </AnimatePresence>
         </div>
       </header>
+      
+      {/* ─── ACTIVATION OVERLAY ─── */}
+      <AnimatePresence>
+        {showActivation && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleActivation}
+            style={{
+              position: "fixed", inset: 0, zContext: 5000,
+              background: "rgba(255,255,255,0.7)",
+              backdropFilter: "blur(12px)",
+              display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center",
+              cursor: "pointer", zIndex: 10000
+            }}
+          >
+            <motion.div
+              animate={{ y: [0, -10, 0] }}
+              transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+              style={{
+                width: 100, height: 100, borderRadius: "50%",
+                background: "linear-gradient(135deg, rgba(106,140,255,0.2), rgba(59,130,246,0.1))",
+                border: "1px solid rgba(106,140,255,0.3)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                marginBottom: 24, boxShadow: "0 0 40px rgba(106,140,255,0.15)"
+              }}
+            >
+              <Cpu size={40} color="#6a8cff" />
+            </motion.div>
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "#1a1a1a", marginBottom: 8 }}>AIRA is ready</h2>
+            <p style={{ fontSize: "0.9rem", color: "#64748b", fontWeight: 500 }}>Tap anywhere to activate</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ════════════════════════════════════════
           BODY ROW — flex:1, overflow:hidden
@@ -591,22 +646,24 @@ export default function Agent({ user }) {
            * ORB WRAPPER — absolute centered for maximum stability.
            * This ensures the orb never shifts even if re-renders occur.
            */}
-          <div style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-          }}>
+          <div 
+            onClick={() => {
+              if (!hasStarted) handleActivation();
+            }}
+            style={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              cursor: !hasStarted ? "pointer" : "default",
+            }}
+          >
             <VoiceOrb
               state={voice.state}
               thinkingMessage={voice.thinkingMessage}
               toggleListening={() => {
-                voice.unlock();
-                if (pendingGreetingRef.current) {
-                  voice.speak(pendingGreetingRef.current);
-                  pendingGreetingRef.current = null;
-                }
-                voice.toggleOrb();
+                if (!hasStarted) handleActivation();
+                else voice.toggleOrb();
               }}
             />
           </div>
@@ -1171,6 +1228,10 @@ export default function Agent({ user }) {
         @keyframes aira-pulse {
           0%, 100% { opacity: 1; transform: scale(1); }
           50%       { opacity: 0.4; transform: scale(0.7); }
+        }
+        @keyframes fade-in {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
