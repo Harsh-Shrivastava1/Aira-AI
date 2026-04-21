@@ -239,6 +239,13 @@ export default function Agent({ user }) {
             fileName: fileContext.fileName,
           }),
         });
+
+        if (!resp.ok) {
+          const errorText = await resp.text();
+          console.error(`File chat API error (${resp.status}):`, errorText);
+          throw new Error(`Server responded with ${resp.status}`);
+        }
+
         const data = await resp.json();
         const reply = data.reply || "I couldn't find a clear answer in the document.";
 
@@ -259,6 +266,13 @@ export default function Agent({ user }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageHistory: messageHistoryRef.current, userName, memory: memoryText }),
       });
+
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        console.error(`Chat API error (${resp.status}):`, errorText);
+        throw new Error(`Server responded with ${resp.status}`);
+      }
+
       const data = await resp.json();
       const reply = data.reply || "Hmm, say that again?";
 
