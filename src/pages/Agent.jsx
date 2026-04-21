@@ -62,7 +62,14 @@ export default function Agent({ user }) {
   const [pasteMode, setPasteMode] = useState("text");
   const [pastedText, setPastedText] = useState("");
   const [history, setHistory] = useState([]);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const profileRef = useRef(null);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -445,8 +452,8 @@ export default function Agent({ user }) {
         inset: 0,
         width: "100vw",
         height: "100vh",
-        display: "grid",
-        gridTemplateRows: `${HEADER_H}px 1fr`,
+        display: "flex",
+        flexDirection: "column",
         overflow: "hidden",
         background: "linear-gradient(135deg, #f5f7fb, #e9eef7)",
         fontFamily: "'Inter', system-ui, sans-serif",
@@ -487,17 +494,15 @@ export default function Agent({ user }) {
       ════════════════════════════════════════ */}
       <header style={{
         flexShrink: 0,
-        height: HEADER_H,
-        minHeight: HEADER_H,
+        height: isMobile ? 60 : HEADER_H,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "0 24px",
-        background: "rgba(255, 255, 255, 0.95)",
+        padding: isMobile ? "0 16px" : "0 24px",
+        background: "rgba(255, 255, 255, 0.9)",
         backdropFilter: "blur(20px)",
         WebkitBackdropFilter: "blur(20px)",
-        borderBottom: "1px solid rgba(0,0,0,0.08)",
-        boxShadow: "0 4px 20px rgba(0,0,0,0.03)",
+        borderBottom: "1px solid rgba(0,0,0,0.05)",
         position: "relative",
         zIndex: 100,
         transition: "all 0.25s ease",
@@ -520,7 +525,9 @@ export default function Agent({ user }) {
           </div>
           <div style={{ lineHeight: 1 }}>
             <div style={{ fontSize: "0.84rem", fontWeight: 800, color: "#1a1a1a", letterSpacing: "0.08em" }}>AIRA</div>
-            <div style={{ fontSize: "0.55rem", color: "#6b7280", fontWeight: 600, letterSpacing: "0.2em", marginTop: 2 }}>AI VOICE AGENT</div>
+            {!isMobile && (
+              <div style={{ fontSize: "0.55rem", color: "#6b7280", fontWeight: 600, letterSpacing: "0.2em", marginTop: 2 }}>AI VOICE AGENT</div>
+            )}
           </div>
 
           {/* Active scenario pill */}
@@ -549,10 +556,10 @@ export default function Agent({ user }) {
           </AnimatePresence>
         </div>
 
-        {/* Right: Session Report */}
+        {/* Right side: Session Report (Desktop) & Mobile Tools */}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <AnimatePresence>
-            {evaluation && (
+            {evaluation && !isMobile && (
               <motion.button
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -573,6 +580,48 @@ export default function Agent({ user }) {
               </motion.button>
             )}
           </AnimatePresence>
+
+          {isMobile && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 50 }}>
+              {evaluation && (
+                <button
+                  onClick={() => setShowEvalPanel((v) => !v)}
+                  style={{
+                    background: "rgba(16, 185, 129, 0.1)",
+                    border: "1px solid rgba(16, 185, 129, 0.2)",
+                    borderRadius: 8,
+                    width: 32, height: 32,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", color: "#10b981",
+                  }}
+                >
+                  <BarChart2 size={14} />
+                </button>
+              )}
+              <button
+                onClick={() => setShowPasteModal(true)}
+                title="Paste large text"
+                style={{
+                  background: "rgba(106,140,255,0.08)",
+                  border: "1px solid rgba(106,140,255,0.15)",
+                  borderRadius: 8,
+                  width: 32, height: 32,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", color: "#6a8cff",
+                }}
+              >
+                <Clipboard size={14} />
+              </button>
+
+              <FileUpload
+                fileContext={null}
+                onFileAnalyzed={(result) => setFileContext(result)}
+                onClearFile={() => setFileContext(null)}
+                addMessage={addMessage}
+                voiceSpeak={(text) => voice.speak(text)}
+              />
+            </div>
+          )}
         </div>
       </header>
       
@@ -617,24 +666,31 @@ export default function Agent({ user }) {
           Left orb (55%) + Right chat (45%)
       ════════════════════════════════════════ */}
       <main style={{
-        gridRow: "2",
-        display: "grid",
-        gridTemplateColumns: "55% 1fr",
+        flex: 1,
+        display: "flex",
+        flexDirection: isMobile ? "column" : "row",
         overflow: "hidden",
         position: "relative",
         zIndex: 1,
+        maxWidth: isMobile ? 420 : "none",
+        margin: "0 auto",
+        width: "100%",
       }}>
 
         {/* ── LEFT: ORB PANEL ── */}
-        <div style={{
-          overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-          borderRight: "1px solid rgba(0,0,0,0.05)",
-        }}>
+        <div 
+          className="orb-panel"
+          style={{
+            display: "flex",
+            flex: isMobile ? "none" : "0 0 55%",
+            height: isMobile ? "auto" : "100%",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            position: "relative",
+            borderRight: isMobile ? "none" : "1px solid rgba(0,0,0,0.05)",
+          }}
+        >
           {/* Divider line */}
           <div style={{
             position: "absolute", right: 0, top: "20%", bottom: "20%",
@@ -650,12 +706,15 @@ export default function Agent({ user }) {
             onClick={() => {
               if (!hasStarted) handleActivation();
             }}
+            className="orb-container"
             style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
+              position: isMobile ? "relative" : "absolute",
+              top: isMobile ? "auto" : "50%",
+              left: isMobile ? "auto" : "50%",
+              transform: isMobile ? "none" : "translate(-50%, -50%)",
+              margin: isMobile ? "20px 0 10px" : "0",
               cursor: !hasStarted ? "pointer" : "default",
+              transition: "all 0.4s ease",
             }}
           >
             <VoiceOrb
@@ -669,18 +728,21 @@ export default function Agent({ user }) {
           </div>
         </div>
 
-        {/* ── RIGHT: CHAT PANEL ── */}
-        <div style={{
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          position: "relative",
-          background: "rgba(255,255,255,0.85)",
-          backdropFilter: "blur(20px)",
-          borderLeft: "1px solid rgba(0,0,0,0.08)",
-          boxShadow: "-10px 0 40px rgba(0,0,0,0.03)",
-          transition: "all 0.25s ease",
-        }}>
+        {/* ── CHAT PANEL ── */}
+        <div 
+          className="chat-panel"
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            position: "relative",
+            background: isMobile ? "transparent" : "rgba(255,255,255,0.85)",
+            backdropFilter: isMobile ? "none" : "blur(20px)",
+            borderLeft: isMobile ? "none" : "1px solid rgba(0,0,0,0.08)",
+            width: "100%",
+          }}
+        >
 
           {/* Eval panel slides from right — only opacity+x, position:absolute so it doesn't shift layout */}
           <AnimatePresence>
@@ -702,78 +764,78 @@ export default function Agent({ user }) {
             )}
           </AnimatePresence>
 
-          {/* Chat sub-header — static */}
-          <div style={{
-            flexShrink: 0,
-            height: 46,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "0 22px",
-            borderBottom: "1px solid rgba(0,0,0,0.08)",
-            background: "rgba(255,255,255,0.95)",
-          }}>
-            {/* State dot — color transition only via CSS, no motion layout */}
+          {/* Chat sub-header — hidden on mobile */}
+          {!isMobile && (
             <div style={{
-              width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
-              background: stateDotColor,
-              boxShadow: stateDotGlow,
-              transition: "background 0.4s, box-shadow 0.4s",
-            }} />
-            <span style={{
-              fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.2em",
-              textTransform: "uppercase", color: "#6b7280",
+              flexShrink: 0,
+              height: 46,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "0 22px",
+              borderBottom: "1px solid rgba(0,0,0,0.08)",
+              background: "rgba(255,255,255,0.95)",
             }}>
-              Conversation
-            </span>
-            {messages.length > 0 && (
-              <span style={{ fontSize: "0.6rem", color: "#9ca3af" }}>
-                {messages.length} msg{messages.length !== 1 ? "s" : ""}
+              <div style={{
+                width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                background: stateDotColor,
+                boxShadow: stateDotGlow,
+                transition: "background 0.4s, box-shadow 0.4s",
+              }} />
+              <span style={{
+                fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.2em",
+                textTransform: "uppercase", color: "#6b7280",
+              }}>
+                Conversation
               </span>
-            )}
 
-            {/* File upload button — always at the far right */}
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-              <button
-                onClick={() => setShowPasteModal(true)}
-                title="Paste large text"
-                style={{
-                  background: "rgba(106,140,255,0.08)",
-                  border: "1px solid rgba(106,140,255,0.15)",
-                  borderRadius: 8,
-                  width: 32, height: 32,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: "pointer", color: "#6a8cff",
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.15)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.08)"; }}
-              >
-                <Clipboard size={15} />
-              </button>
+              {/* File upload button — always at the far right */}
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  onClick={() => setShowPasteModal(true)}
+                  title="Paste large text"
+                  style={{
+                    background: "rgba(106,140,255,0.08)",
+                    border: "1px solid rgba(106,140,255,0.15)",
+                    borderRadius: 8,
+                    width: 32, height: 32,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", color: "#6a8cff",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.15)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.08)"; }}
+                >
+                  <Clipboard size={15} />
+                </button>
 
-              <FileUpload
-                fileContext={null} /* show only the button here, not the file indicator */
-                onFileAnalyzed={(result) => setFileContext(result)}
-                onClearFile={() => setFileContext(null)}
-                addMessage={addMessage}
-                voiceSpeak={(text) => voice.speak(text)}
-              />
+                <FileUpload
+                  fileContext={null}
+                  onFileAnalyzed={(result) => setFileContext(result)}
+                  onClearFile={() => setFileContext(null)}
+                  addMessage={addMessage}
+                  voiceSpeak={(text) => voice.speak(text)}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* SCROLLABLE AREA — only child that scrolls */}
-          <div style={{
-            flex: 1,
-            height: "100%",
-            minHeight: 0,
-            overflowY: "auto",
-            overflowX: "hidden",
-            scrollBehavior: "smooth",
-            padding: "20px 20px 28px",
-            paddingRight: showEvalPanel && evaluation ? 306 : 20,
-            transition: "padding-right 0.3s ease",
-          }}>
+          <div 
+            className="chat-scroll-area"
+            style={{
+              flex: 1,
+              height: "100%",
+              minHeight: 0,
+              overflowY: "auto",
+              overflowX: "hidden",
+              scrollBehavior: "smooth",
+              padding: isMobile ? "12px 12px 30px" : "20px 20px 28px",
+              paddingRight: (showEvalPanel && evaluation && !isMobile) ? 306 : (isMobile ? 12 : 20),
+              transition: "padding-right 0.3s ease",
+              maxHeight: isMobile ? "60vh" : "none",
+            }}
+          >
             {/* File context indicator (inside scrollable area) */}
             <AnimatePresence>
               {fileContext && (
@@ -863,6 +925,7 @@ export default function Agent({ user }) {
 
             <TransientChatBox messages={messages} onRefineEmail={handleUserSpeak} />
           </div>
+
         </div>
       </main>
 
@@ -873,16 +936,16 @@ export default function Agent({ user }) {
         ref={profileRef}
         style={{
           position: "fixed",
-          top: 20,
-          right: 24,
+          top: isMobile ? 12 : 20,
+          right: isMobile ? 16 : 24,
           zIndex: 1000,
         }}
       >
         <div
           onClick={() => setShowUserMenu(!showUserMenu)}
           style={{
-            width: 42,
-            height: 42,
+            width: isMobile ? 36 : 42,
+            height: isMobile ? 36 : 42,
             borderRadius: "50%",
             cursor: "pointer",
             border: "2px solid rgba(120,140,255,0.3)",
@@ -1239,6 +1302,24 @@ export default function Agent({ user }) {
         ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.15); }
         .history-item-container:hover .delete-history-btn { opacity: 1 !important; }
         .delete-history-btn:hover { background: #fee2e2 !important; border-radius: 6px; }
+
+        @media (max-width: 768px) {
+          .orb-container {
+            transform: scale(0.65) !important;
+            margin-top: 10px !important;
+            margin-bottom: 5px !important;
+          }
+          .chat-scroll-area {
+            max-height: 55vh !important;
+          }
+          header {
+            backdrop-filter: blur(5px) !important;
+            background: rgba(255, 255, 255, 0.8) !important;
+          }
+          main {
+             overflow: hidden !important;
+          }
+        }
       `}</style>
     </div>
   );

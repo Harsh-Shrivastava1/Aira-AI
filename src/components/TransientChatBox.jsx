@@ -76,86 +76,74 @@ export default function TransientChatBox({ messages, onRefineEmail }) {
             <motion.div
               layout
               key={m.id || i}
-              initial={{ opacity: 0, y: 18, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.95, transition: { duration: 0.2 } }}
-              transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-              className="flex flex-col w-full mb-1"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className="flex flex-col w-full mb-[10px]"
               style={{ alignItems: isUser ? "flex-end" : "flex-start" }}
             >
               {/* Row for avatar + chat bubble */}
-              <div className="flex w-full" style={{ justifyContent: isUser ? "flex-end" : "flex-start" }}>
-                {/* AIRA avatar dot */}
+              <div className="flex w-full px-4" style={{ 
+                justifyContent: isUser ? "flex-end" : "flex-start",
+                gap: "10px"
+              }}>
+                {/* AIRA avatar dot - hidden on mobile if preferred, but kept for context */}
                 {!isUser && (
                   <div
-                    className="flex-none w-7 h-7 rounded-full flex items-center justify-center mr-3 mt-1"
+                    className="flex-none w-8 h-8 rounded-full flex items-center justify-center mt-1 sm:flex hidden"
                     style={{
                       background: "linear-gradient(135deg, #6a8cff, #8ed0ff)",
-                      boxShadow: "0 0 12px rgba(100,140,255,0.2)",
+                      boxShadow: "0 4px 10px rgba(100,140,255,0.2)",
                       flexShrink: 0,
                     }}
                   >
-                    <span style={{ fontSize: "9px", color: "white", fontWeight: 700 }}>AI</span>
+                    <span style={{ fontSize: "10px", color: "white", fontWeight: 800 }}>AI</span>
                   </div>
                 )}
 
                 <div
+                  className="chat-bubble"
                   style={{
                     maxWidth: m.type === "code" || m.text.includes("```") ? "95%" : "75%",
                     width: m.type === "code" || m.text.includes("```") ? "100%" : "auto",
-                    padding: m.type === "code" || m.text.includes("```") ? "0" : "12px 16px",
-                    borderRadius: isUser
-                      ? "18px 18px 4px 18px"
-                      : "18px 18px 18px 4px",
-                    fontSize: "0.825rem",
-                    lineHeight: 1.65,
-                    letterSpacing: "0.01em",
+                    padding: m.type === "code" || m.text.includes("```") ? "0" : "12px 18px",
+                    borderRadius: "20px",
+                    fontSize: "1rem",
+                    lineHeight: 1.5,
+                    position: "relative",
                     ...(isUser && m.type !== "code"
                       ? {
-                        background: "linear-gradient(135deg, #6a8cff, #7fd3ff)",
+                        background: "linear-gradient(135deg, #3b82f6, #60a5fa)",
                         color: "white",
-                        boxShadow: "0 5px 20px rgba(100,120,255,0.25)",
+                        boxShadow: "0 4px 12px rgba(59, 130, 246, 0.2)",
                         fontWeight: 500,
+                        borderBottomRightRadius: "4px",
                       }
                       : m.type === "code" || m.text.includes("```")
                       ? {
                         background: "transparent",
                         color: "#1a1a1a",
                         boxShadow: "none",
-                        fontWeight: 400,
                       }
                       : {
-                        background: "#ffffff",
-                        border: "1px solid rgba(0,0,0,0.06)",
+                        background: "rgba(255, 255, 255, 0.7)",
+                        backdropFilter: "blur(10px)",
+                        WebkitBackdropFilter: "blur(10px)",
+                        border: "1px solid rgba(255, 255, 255, 0.4)",
                         color: "#1a1a1a",
-                        boxShadow: "0 4px 15px rgba(0,0,0,0.04)",
-                        fontWeight: 400,
+                        boxShadow: "0 4px 15px rgba(0,0,0,0.03)",
+                        borderBottomLeftRadius: "4px",
                       }),
                   }}
                 >
                   {renderContent(m)}
                 </div>
-
-                {/* User avatar dot */}
-                {isUser && (
-                  <div
-                    className="flex-none w-7 h-7 rounded-full flex items-center justify-center ml-3 mt-1"
-                    style={{
-                      background: "rgba(0,0,0,0.04)",
-                      border: "1px solid rgba(0,0,0,0.05)",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <span style={{ fontSize: "9px", color: "#6b7280", fontWeight: 700 }}>
-                      YOU
-                    </span>
-                  </div>
-                )}
               </div>
 
               {/* Optional Email Card */}
               {!isUser && m.emailDraft && (
-                <div style={{ marginTop: 14, width: "100%", paddingLeft: 40, maxWidth: "94%" }}>
+                <div style={{ marginTop: 14, width: "100%", paddingLeft: 16, paddingRight: 16 }}>
                   <EmailCard
                     subject={m.emailDraft.subject}
                     body={m.emailDraft.body}
