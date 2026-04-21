@@ -215,9 +215,8 @@ export default function Agent({ user }) {
       return;
     }
 
-    // 3. File-context Q&A — if a file is active, route question to file-chat
+    // 3. File-context Q&A — if a file is active, route question to /api/file
     if (fileContext?.extractedText) {
-      // Check if user wants to clear the file
       if (tLower.includes("remove file") || tLower.includes("clear file") || tLower.includes("close file") || tLower.includes("remove document")) {
         setFileContext(null);
         const reply = "Done! I've removed the file. We're back to normal chat.";
@@ -229,7 +228,7 @@ export default function Agent({ user }) {
       }
 
       try {
-        const resp = await fetch(API + "/file-chat", {
+        const resp = await fetch(`${API_BASE}/api/file`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -239,14 +238,10 @@ export default function Agent({ user }) {
           }),
         });
 
-        if (!resp.ok) {
-          const errorText = await resp.text();
-          console.error(`File chat API error (${resp.status}):`, errorText);
-          throw new Error(`Server responded with ${resp.status}`);
-        }
+        if (!resp.ok) throw new Error("File API failed");
 
         const data = await resp.json();
-        const reply = data.reply || "I couldn't find a clear answer in the document.";
+        const reply = data.reply;
 
         messageHistoryRef.current.push({ role: "assistant", content: reply });
         addMessage("aira", reply);
@@ -255,15 +250,18 @@ export default function Agent({ user }) {
         return;
       } catch (err) {
         console.error("File chat error:", err);
-        // Fall through to normal chat
       }
     }
 
     try {
-      const resp = await fetch(API + "/chat", {
+      const resp = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageHistory: messageHistoryRef.current, userName, memory: memoryText }),
+        body: JSON.stringify({ 
+          messageHistory: messageHistoryRef.current, 
+          userName, 
+          memory: memoryText 
+        }),
       });
 
       if (!resp.ok) {

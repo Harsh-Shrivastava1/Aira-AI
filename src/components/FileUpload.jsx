@@ -48,31 +48,50 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
 
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      let content = "";
+      const isImage = file.type.startsWith("image/");
+      
+      if (isImage) {
+        content = `[Image: ${file.name}] Image analysis is handled via description. Please describe the image.`;
+      } else {
+        content = await file.text();
+      }
 
-      const resp = await fetch(API + "/upload", {
+      const resp = await fetch(`${API_BASE}/api/file`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          fileContent: content,
+          fileName: file.name,
+          question: "Please provide a very short summary of this file."
+        }),
       });
 
       const data = await resp.json();
 
       if (!resp.ok) {
-        throw new Error(data.error || "Upload failed");
+        throw new Error(data.error || "Analysis failed");
       }
 
-      onFileAnalyzed(data);
+      // Format result to match expected context
+      const result = {
+        fileName: file.name,
+        extractedText: content,
+        summary: data.reply,
+        spokenSummary: data.reply
+      };
+
+      onFileAnalyzed(result);
 
       // Add AIRA message + speak
       if (addMessage) {
-        const msg = `I've analyzed your file "${data.fileName}". ${data.spokenSummary || data.summary}`;
+        const msg = `I've analyzed your file "${file.name}". ${result.summary}`;
         addMessage("aira", msg);
         if (voiceSpeak) voiceSpeak(msg);
       }
     } catch (err) {
-      console.error("Upload error:", err);
-      setError(err.message || "Failed to upload file");
+      console.error("File processing error:", err);
+      setError(err.message || "Failed to process file");
     } finally {
       setUploading(false);
     }
