@@ -233,6 +233,13 @@ export function useVoice(onUserSpeak) {
     }
   }, [getVoice, startListening, state]);
 
+  const setThinking = useCallback((message = "") => {
+    shouldRestartRef.current = false;
+    try { recognitionRef.current?.stop(); } catch (_) {}
+    setThinkingMessage(message);
+    setState("thinking");
+  }, []);
+
   const unlock = useCallback(() => {
     if (!isSpeechUnlocked.current) {
       const u = new SpeechSynthesisUtterance("");
