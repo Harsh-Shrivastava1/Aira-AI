@@ -258,9 +258,7 @@ export default function Agent({ user }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          messageHistory: messageHistoryRef.current, 
-          userName, 
-          memory: memoryText 
+          message: transcript
         }),
       });
 
