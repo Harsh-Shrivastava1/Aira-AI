@@ -8,6 +8,7 @@ import MinimalEvaluationOverlay from "../components/MinimalEvaluationOverlay";
 import FileUpload from "../components/FileUpload";
 import { useVoice } from "../hooks/useVoice";
 import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fetchMemory, saveSessionEvaluation, fetchAllThreads } from "../hooks/useFirestore";
+import { auth } from "../config/firebase";
 import { API_BASE } from "../config/api";
 const API = `${API_BASE}/api`;
 
