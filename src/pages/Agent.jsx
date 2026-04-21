@@ -10,7 +10,7 @@ import { useVoice } from "../hooks/useVoice";
 import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fetchMemory, saveSessionEvaluation, fetchAllThreads } from "../hooks/useFirestore";
 import { auth } from "@/config/firebase";
 
-const API = "http://127.0.0.1:5000/api";
+const API = "/api";
 
 const SCORE_REQUEST_PATTERNS = [
   /show\s+(my\s+)?score/i,

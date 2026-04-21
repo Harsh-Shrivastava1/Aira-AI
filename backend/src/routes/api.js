@@ -1,5 +1,5 @@
 import express from "express";
-import { generateAgentResponse } from "../ai/groqService.js";
+import { generateAgentResponse, generateChatTitle } from "../ai/groqService.js";
 import { evaluateSession } from "../feedback/evaluator.js";
 
 const router = express.Router();
@@ -26,6 +26,7 @@ router.post("/chat", async (req, res) => {
       reply: result.reply,
       intent: result.intent,
       scenario: result.scenario,
+      emailDraft: result.emailDraft || null,
       action: result.intent === "start_session" ? "begin_roleplay" : null
     });
   } catch (error) {
@@ -35,6 +36,19 @@ router.post("/chat", async (req, res) => {
       intent: "chat",
       scenario: null
     });
+  }
+});
+
+// ─────────────────────────────────────────────
+// POST /api/generate-title — Summarize chat
+// ─────────────────────────────────────────────
+router.post("/generate-title", async (req, res) => {
+  try {
+    const { message } = req.body;
+    const title = await generateChatTitle(message);
+    res.json({ title });
+  } catch (error) {
+    res.status(500).json({ title: "New Conversation" });
   }
 });
 

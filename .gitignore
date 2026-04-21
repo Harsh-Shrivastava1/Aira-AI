@@ -19,6 +19,7 @@ pnpm-debug.log*
 # Build output
 dist/
 build/
+.vercel/
 coverage/
 
 # Runtime/cache/temp
@@ -36,3 +37,4 @@ Thumbs.db
 
 # Common local files
 *.local
+.vercel

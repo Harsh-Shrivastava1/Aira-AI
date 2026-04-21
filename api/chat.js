@@ -1,4 +1,6 @@
-import { groq } from "../config/groq.js";
+import Groq from "groq-sdk";
+
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const buildSystemPrompt = (userName, memory) => `You are AIRA — Advanced Intelligent Responsive Assistant. A next-gen AI voice companion created by Harsh Shrivastava.
 
@@ -69,12 +71,21 @@ CRITICAL OUTPUT FORMAT — return ONLY raw valid JSON, no markdown fences:
   "emailDraft": { "subject": "Clear subject line", "body": "Clean paragraphs, proper greeting and sign-off" } // ONLY include if intent is write_email, otherwise null.
 }`;
 
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
-export const generateAgentResponse = async ({ userName, memory, messageHistory }) => {
   try {
+    const { messageHistory, userName, memory } = req.body;
+
+    if (!messageHistory || !Array.isArray(messageHistory)) {
+      return res.status(400).json({ error: "messageHistory array is required" });
+    }
+
     const messages = [
       { role: "system", content: buildSystemPrompt(userName, memory) },
-      ...messageHistory
+      ...messageHistory.slice(-15) // Only send last 15 messages for context
     ];
 
     const completion = await groq.chat.completions.create({
@@ -88,41 +99,20 @@ export const generateAgentResponse = async ({ userName, memory, messageHistory }
     const content = completion.choices[0]?.message?.content;
     const data = JSON.parse(content);
 
-    return {
+    return res.status(200).json({
       reply: data.reply || data.speech || "Hmm, I lost my train of thought! Say that again?",
       intent: data.intent || "chat",
       scenario: data.scenario || null,
-      emailDraft: data.emailDraft || null
-    };
+      emailDraft: data.emailDraft || null,
+      action: data.intent === "start_session" ? "begin_roleplay" : null
+    });
   } catch (error) {
-    console.error("Groq error:", error);
-    return {
-      reply: "Something got tangled on my end — wanna try that again?",
+    console.error("Chat API error:", error);
+    return res.status(500).json({
+      reply: "Something went wrong on my end — wanna try that again?",
       intent: "chat",
       scenario: null,
       emailDraft: null
-    };
-  }
-};
-
-export const generateChatTitle = async (message) => {
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: "You are a helpful assistant. Generate a VERY short, 2-5 word title for a chat thread based on the user's first message. Return ONLY the title string, no quotes or extra text."
-        },
-        { role: "user", content: message }
-      ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.5,
-      max_tokens: 20
     });
-
-    return completion.choices[0]?.message?.content?.trim() || "New Conversation";
-  } catch (error) {
-    console.error("Title gen error:", error);
-    return "New Conversation";
   }
-};
+}
