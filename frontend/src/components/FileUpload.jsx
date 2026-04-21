@@ -2,7 +2,8 @@ import React, { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Paperclip, X, FileText, Image, File, Upload, Loader2, Sparkles, MessageCircle } from "lucide-react";
 
-const API = "http://127.0.0.1:5000/api";
+import { API_BASE } from "../config/api";
+const API = `${API_BASE}/api`;
 
 const ACCEPT = ".pdf,.txt,.csv,.json,.md,.png,.jpg,.jpeg,.webp";
 const MAX_SIZE = 10 * 1024 * 1024; // 10MB
