@@ -142,24 +142,27 @@ export default async function handler(req, res) {
     }
 
     // Generate summary via Groq
-    const summaryPrompt = `You are AIRA, an intelligent assistant. A user just uploaded a document. Analyze it and provide:
+    const summaryPrompt = `You are AIRA, an intelligent assistant. A user just uploaded a document. 
+    Your goal is to thoroughly analyze this document and provide a high-quality summary and explanation.
 
-1. A clear, concise summary (3-5 sentences)
-2. Key points or highlights (bullet points)
-3. The type/nature of the document
+    Please provide:
+    1. A clear, engaging summary (3-5 sentences) that explains what the document is about.
+    2. A deeper explanation of the key concepts, findings, or sections found in the document.
+    3. Key points or highlights as bullet points.
+    4. The type/nature of the document.
 
-Document content:
----
-${text.slice(0, 15000)}
----
+    Document content:
+    ---
+    ${text.slice(0, 15000)}
+    ---
 
-Return ONLY valid JSON (no markdown fences):
-{
-  "summary": "Your concise summary here",
-  "keyPoints": ["point 1", "point 2", "..."],
-  "documentType": "e.g. Research paper, Resume, Legal contract, etc.",
-  "spokenSummary": "A short, natural 2-sentence spoken summary for text-to-speech"
-}`;
+    Return ONLY valid JSON (no markdown fences):
+    {
+      "summary": "Your detailed summary and explanation here",
+      "keyPoints": ["point 1", "point 2", "..."],
+      "documentType": "e.g. Research paper, Resume, Legal contract, etc.",
+      "spokenSummary": "A short, natural 2-sentence spoken summary for text-to-speech"
+    }`;
 
     const completion = await groq.chat.completions.create({
       messages: [{ role: "user", content: summaryPrompt }],

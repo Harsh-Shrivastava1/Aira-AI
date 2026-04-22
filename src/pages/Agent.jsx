@@ -247,7 +247,7 @@ export default function Agent({ user }) {
       }
 
       try {
-        const resp = await fetch(`${API_BASE}/api/file`, {
+        const resp = await fetch(`${API_BASE}/api/file-chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

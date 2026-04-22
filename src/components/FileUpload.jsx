@@ -48,23 +48,12 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
 
     setUploading(true);
     try {
-      let content = "";
-      const isImage = file.type.startsWith("image/");
-      
-      if (isImage) {
-        content = `[Image: ${file.name}] Image analysis is handled via description. Please describe the image.`;
-      } else {
-        content = await file.text();
-      }
+      const formData = new FormData();
+      formData.append("file", file);
 
-      const resp = await fetch(`${API_BASE}/api/file`, {
+      const resp = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          fileContent: content,
-          fileName: file.name,
-          question: "Please provide a very short summary of this file."
-        }),
+        body: formData,
       });
 
       const data = await resp.json();
@@ -76,18 +65,25 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
       // Format result to match expected context
       const result = {
         fileName: file.name,
-        extractedText: content,
-        summary: data.reply,
-        spokenSummary: data.reply
+        extractedText: data.extractedText,
+        summary: data.summary,
+        keyPoints: data.keyPoints,
+        documentType: data.documentType,
+        spokenSummary: data.spokenSummary || data.summary
       };
 
       onFileAnalyzed(result);
 
       // Add AIRA message + speak
       if (addMessage) {
-        const msg = `I've analyzed your file "${file.name}". ${result.summary}`;
+        // Build a nice message with summary and key points
+        let msg = `I've analyzed your file "${file.name}".\n\n${result.summary}`;
+        if (result.keyPoints && result.keyPoints.length > 0) {
+          msg += "\n\n**Key Points:**\n" + result.keyPoints.map(p => `• ${p}`).join("\n");
+        }
+        
         addMessage("aira", msg);
-        if (voiceSpeak) voiceSpeak(msg);
+        if (voiceSpeak) voiceSpeak(result.spokenSummary || `I've analyzed ${file.name}.`);
       }
     } catch (err) {
       console.error("File processing error:", err);
