@@ -114,13 +114,17 @@ RESPONSE STYLE
 OUTPUT FORMAT (STRICT)
 ======================
 
-Always return JSON in this format:
+ Always return JSON in this format:
 {
 "reply": "Natural, human-like response (keep this short if an email card is also provided)",
 "intent": "user_intent_detected",
 "scenario": "normal | interview | teaching | roleplay | problem_solving",
-"emailDraft": { "subject": "Subject line", "body": "Full email body" } // Provide this ONLY if you are writing or drafting an email for the user.
+"emailDraft": { "subject": "...", "body": "..." } | null
 }
+
+CRITICAL: ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, write, or compose an email. 
+If the user is asking a question, seeking information, or just chatting, set "emailDraft" to null. 
+Never use "emailDraft" to repeat your "reply" or to format a normal explanation.
 
 ========================
 FINAL BEHAVIOR
@@ -167,11 +171,23 @@ END`;
     const data = await response.json();
     const content = JSON.parse(data.choices?.[0]?.message?.content || "{}");
 
+    // Robust email draft validation: only pass it if it's actually an email-like object
+    let finalEmailDraft = null;
+    if (content.emailDraft && content.emailDraft.subject && content.emailDraft.body) {
+      const subject = content.emailDraft.subject.trim();
+      const body = content.emailDraft.body.trim();
+      
+      // If it's not a placeholder and actually has content
+      if (subject !== "..." && body !== "..." && subject.length > 2 && body.length > 5) {
+        finalEmailDraft = { subject, body };
+      }
+    }
+
     return res.status(200).json({
       reply: content.reply || "I'm ready. What's next?",
       intent: content.intent || "chat",
       scenario: content.scenario || "normal",
-      emailDraft: content.emailDraft || null
+      emailDraft: finalEmailDraft
     });
 
   } catch (error) {

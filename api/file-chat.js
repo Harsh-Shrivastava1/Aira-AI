@@ -46,8 +46,10 @@ ${trimmedContent}
 Return ONLY valid JSON (no markdown fences):
 {
   "reply": "Your answer to the user's question.",
-  "emailDraft": { "subject": "Subject line", "body": "Full email body" } // Provide this ONLY if the user asks to write or draft an email based on the file.
-}`
+  "emailDraft": { "subject": "...", "body": "..." } | null
+}
+
+CRITICAL: ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, write, or compose an email based on the file. Otherwise, set it to null.`
       },
       { role: "user", content: question }
     ];
@@ -62,9 +64,19 @@ Return ONLY valid JSON (no markdown fences):
 
     const data = JSON.parse(completion.choices[0]?.message?.content || "{}");
 
+    // Robust email draft validation
+    let finalEmailDraft = null;
+    if (data.emailDraft && data.emailDraft.subject && data.emailDraft.body) {
+      const subject = data.emailDraft.subject.trim();
+      const body = data.emailDraft.body.trim();
+      if (subject !== "..." && body !== "..." && subject.length > 2 && body.length > 5) {
+        finalEmailDraft = { subject, body };
+      }
+    }
+
     return res.status(200).json({
       reply: data.reply || "I've processed your request.",
-      emailDraft: data.emailDraft || null,
+      emailDraft: finalEmailDraft,
     });
   } catch (error) {
     console.error("File chat error:", error);

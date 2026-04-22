@@ -142,7 +142,7 @@ export default function TransientChatBox({ messages, onRefineEmail }) {
               </div>
 
               {/* Optional Email Card */}
-              {!isUser && m.emailDraft && (
+              {!isUser && m.emailDraft && m.emailDraft.subject && m.emailDraft.body && m.emailDraft.subject !== "..." && (
                 <div style={{ marginTop: 14, width: "100%", paddingLeft: 16, paddingRight: 16 }}>
                   <EmailCard
                     subject={m.emailDraft.subject}
