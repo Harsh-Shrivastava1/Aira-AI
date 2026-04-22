@@ -74,13 +74,14 @@ export const createNewThread = async (uid) => {
 };
 
 // ─── Save a single message to a specific thread ──────────────────
-export const saveMessage = async (uid, chatId, role, content, type = "text") => {
+export const saveMessage = async (uid, chatId, role, content, type = "text", emailDraft = null) => {
   if (!auth.currentUser) return;
   try {
     await addDoc(collection(db, "users", uid, "threads", chatId, "messages"), {
       role,
       content,
       type,
+      emailDraft,
       timestamp: serverTimestamp()
     });
     
@@ -148,6 +149,8 @@ export const fetchThreadMessages = async (uid, chatId, count = 20) => {
       .map(d => ({
         role: d.role,
         content: d.content,
+        type: d.type || "text",
+        emailDraft: d.emailDraft || null,
         timestamp: d.timestamp
       }));
   } catch (e) {

@@ -116,9 +116,10 @@ OUTPUT FORMAT (STRICT)
 
 Always return JSON in this format:
 {
-"reply": "Natural, human-like response",
+"reply": "Natural, human-like response (keep this short if an email card is also provided)",
 "intent": "user_intent_detected",
-"scenario": "normal | interview | teaching | roleplay | problem_solving"
+"scenario": "normal | interview | teaching | roleplay | problem_solving",
+"emailDraft": { "subject": "Subject line", "body": "Full email body" } // Provide this ONLY if you are writing or drafting an email for the user.
 }
 
 ========================

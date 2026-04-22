@@ -110,7 +110,8 @@ export default function Agent({ user }) {
       id: Date.now() + idx,
       role: msg.role === "assistant" ? "aira" : msg.role,
       text: msg.content,
-      type: msg.type || "text"
+      type: msg.type || "text",
+      emailDraft: msg.emailDraft || null
     }));
     setMessages(uiMessages);
   };
@@ -138,7 +139,8 @@ export default function Agent({ user }) {
             id: Date.now() + idx,
             role: msg.role === "assistant" ? "aira" : msg.role,
             text: msg.content,
-            type: msg.type || "text"
+            type: msg.type || "text",
+            emailDraft: msg.emailDraft || null
           }));
           setMessages(uiMessages);
         }
@@ -263,8 +265,8 @@ export default function Agent({ user }) {
         const reply = data.reply;
 
         messageHistoryRef.current.push({ role: "assistant", content: reply });
-        addMessage("aira", reply);
-        if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply);
+        addMessage("aira", reply, data.emailDraft);
+        if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply, "text", data.emailDraft);
         voice.speak(reply);
         return;
       } catch (err) {
@@ -298,7 +300,7 @@ export default function Agent({ user }) {
       const hasCode = reply.includes("```") || (reply.includes("{") && reply.includes("}") && reply.includes(";"));
       addMessage("aira", reply, data.emailDraft, hasCode ? "code" : "text");
 
-      if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply, hasCode ? "code" : "text");
+      if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply, hasCode ? "code" : "text", data.emailDraft);
 
       if (data.intent === "start_session" && data.scenario) {
         setCurrentScenario(data.scenario);
@@ -382,8 +384,8 @@ export default function Agent({ user }) {
         reply = "Your code is large — I've analyzed the main part. You can ask for deeper analysis on specific sections if needed.\n\n" + reply;
       }
 
-      addMessage("aira", reply);
-      if (user?.uid && chatId) saveMessage(user.uid, chatId, "assistant", reply);
+      addMessage("aira", reply, data.emailDraft);
+      if (user?.uid && chatId) saveMessage(user.uid, chatId, "assistant", reply, "text", data.emailDraft);
       voice.speak(reply);
     } catch (err) {
       console.error("Paste analysis error:", err);

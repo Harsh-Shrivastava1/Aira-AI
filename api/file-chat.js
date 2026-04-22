@@ -45,7 +45,8 @@ ${trimmedContent}
 
 Return ONLY valid JSON (no markdown fences):
 {
-  "reply": "Your answer to the user's question. If providing code, use triple backticks inside this string."
+  "reply": "Your answer to the user's question.",
+  "emailDraft": { "subject": "Subject line", "body": "Full email body" } // Provide this ONLY if the user asks to write or draft an email based on the file.
 }`
       },
       { role: "user", content: question }
@@ -62,7 +63,8 @@ Return ONLY valid JSON (no markdown fences):
     const data = JSON.parse(completion.choices[0]?.message?.content || "{}");
 
     return res.status(200).json({
-      reply: data.reply || "I couldn't find a clear answer in the document.",
+      reply: data.reply || "I've processed your request.",
+      emailDraft: data.emailDraft || null,
     });
   } catch (error) {
     console.error("File chat error:", error);
