@@ -1,10 +1,15 @@
-import Groq from "groq-sdk";
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+import { createGroqChatCompletion } from "./groqClient.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Enforce File Chat Rate Limiting
+  const rateLimitResult = await enforceRateLimit(req, res, RATE_LIMIT_POLICIES.fileChat);
+  if (!rateLimitResult.allowed) {
+    return;
   }
 
   try {
@@ -17,20 +22,26 @@ export default async function handler(req, res) {
     // Trim file content to fit context window
     const trimmedContent = fileContent.slice(0, 50000);
 
-    let systemPrompt = `You are AIRA — an intelligent file assistant. The user has uploaded a document called "${fileName || "document"}". Answer their questions based ONLY on the document content provided below. Be accurate, concise, and helpful. If the answer is not in the document, say so honestly.
-
-Keep your responses SHORT (2-4 sentences) since they will be spoken via text-to-speech.`;
+    let systemPrompt;
 
     if (type === "code_block") {
-      systemPrompt = `You are AIRA — a Senior Software Engineer and expert debugger.
-The user has provided a code snippet. Your goal is to:
-1. Analyze the code for errors or improvements.
-2. Fix any bugs found.
-3. Explain the issues clearly but concisely.
-4. Always return fixed code inside triple backticks.
+      systemPrompt = `You are AIRA — a senior software engineer and expert debugger.
+The user has provided a code snippet. Analyze it thoroughly:
+1. Identify any bugs, errors, or issues.
+2. Fix the problems and return corrected code inside triple backticks.
+3. Explain what was wrong and what you changed — concisely.
 
-Keep your explanation short (2-4 sentences), but the code block can be as long as needed.
-`;
+Be direct and technically precise. Skip preamble. Do not start with "Certainly!" or "Great question!" or similar scripted phrases.
+Keep the explanation concise (2–4 sentences) since it may be spoken aloud, but the code block can be as long as needed.`;
+    } else {
+      systemPrompt = `You are AIRA — an intelligent assistant helping the user understand a document called "${fileName || "document"}".
+
+Answer the user's question based ONLY on the document content provided. Be accurate and helpful.
+If the answer is not in the document, say so honestly — do not invent information.
+
+Be direct: answer the question first, then add context if needed.
+Do not start with "Certainly!", "Of course!", "Great question!", or similar scripted phrases.
+Keep responses concise (2–4 sentences) since they may be spoken aloud via text-to-speech.`;
     }
 
     const messages = [
@@ -54,15 +65,13 @@ CRITICAL: ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, w
       { role: "user", content: question }
     ];
 
-    const completion = await groq.chat.completions.create({
-      messages,
-      model: "llama-3.3-70b-versatile",
+    const { content: rawContent } = await createGroqChatCompletion(messages, {
       temperature: 0.5,
       max_tokens: type === "code_block" ? 2500 : 800,
-      response_format: { type: "json_object" },
+      response_format: { type: "json_object" }
     });
 
-    const data = JSON.parse(completion.choices[0]?.message?.content || "{}");
+    const data = JSON.parse(rawContent || "{}");
 
     // Robust email draft validation
     let finalEmailDraft = null;
@@ -75,7 +84,7 @@ CRITICAL: ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, w
     }
 
     return res.status(200).json({
-      reply: data.reply || "I've processed your request.",
+      reply: data.reply || "I couldn't find a clear answer in this document.",
       emailDraft: finalEmailDraft,
     });
   } catch (error) {

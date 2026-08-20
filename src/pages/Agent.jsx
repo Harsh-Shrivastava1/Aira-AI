@@ -7,10 +7,83 @@ import TransientChatBox from "../components/TransientChatBox";
 import MinimalEvaluationOverlay from "../components/MinimalEvaluationOverlay";
 import FileUpload from "../components/FileUpload";
 import { useVoice } from "../hooks/useVoice";
-import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fetchMemory, saveSessionEvaluation, fetchAllThreads } from "../hooks/useFirestore";
+import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fetchMemory, saveMemory, saveSessionEvaluation, fetchAllThreads, softDeleteThread } from "../hooks/useFirestore";
 import { auth } from "../config/firebase";
 import { API_BASE } from "../config/api";
+import { classifyError, sanitizeLogDetails, ERROR_MESSAGES } from "../services/errorRecoveryService";
 const API = `${API_BASE}/api`;
+
+/**
+ * Formats a Firestore or JS timestamp into local date and time: e.g. "20 Aug 2026 · 12:42 PM"
+ */
+function formatChatTimestamp(timestamp) {
+  if (!timestamp) return "Recent";
+  try {
+    let dateObj = null;
+    if (typeof timestamp.toDate === "function") {
+      dateObj = timestamp.toDate();
+    } else if (timestamp.seconds) {
+      dateObj = new Date(timestamp.seconds * 1000);
+    } else if (timestamp instanceof Date) {
+      dateObj = timestamp;
+    } else if (typeof timestamp === "number" || typeof timestamp === "string") {
+      dateObj = new Date(timestamp);
+    }
+
+    if (!dateObj || isNaN(dateObj.getTime())) {
+      return "Recent";
+    }
+
+    const datePart = dateObj.toLocaleDateString("en-IN", {
+      day: "numeric",
+      month: "short",
+      year: "numeric"
+    });
+    const timePart = dateObj.toLocaleTimeString("en-IN", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true
+    });
+    return `${datePart} · ${timePart}`;
+  } catch {
+    return "Recent";
+  }
+}
+
+async function fetchWithRetry(url, options, maxRetries = 2) {
+  let lastError = null;
+  let lastResp = null;
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      const resp = await fetch(url, options);
+      if (resp.ok) return resp;
+
+      lastResp = resp;
+      const status = resp.status;
+      // Do not retry 4xx errors (client faults, auth, rate limit)
+      if (status >= 400 && status < 500) {
+        return resp;
+      }
+
+      // Retry 5xx server errors
+      if (attempt <= maxRetries) {
+        await new Promise((r) => setTimeout(r, 600 * attempt));
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      if (err.name === "AbortError") throw err;
+      lastError = err;
+      if (attempt <= maxRetries) {
+        await new Promise((r) => setTimeout(r, 600 * attempt));
+        continue;
+      }
+    }
+  }
+  if (lastResp) return lastResp;
+  throw lastError || new Error("Network request failed");
+}
 
 const SCORE_REQUEST_PATTERNS = [
   /show\s+(my\s+)?score/i,
@@ -23,30 +96,43 @@ function isScoreRequest(text) {
   return SCORE_REQUEST_PATTERNS.some((re) => re.test(text));
 }
 
-/* Developer identity — always answered on the frontend to guarantee accuracy */
-const DEV_PATTERNS = [
-  /who\s+(created|made|built|developed)\s+(you|aira)/i,
-  /who\s+is\s+(your\s+)?(developer|creator|maker|author)/i,
-  /who\s+owns\s+(you|aira)/i,
-  /tell\s+me\s+about\s+your\s+(developer|creator)/i,
+/* Greeting pool — short, natural, voice-ready.
+   Rules: no developer references, no scripted openers, no repeated name usage. */
+const GREETINGS = [
+  "Hey, I'm AIRA. Ready whenever you are.",
+  "Hey, welcome back. What are we working on?",
+  "Good to see you. What are we working on today?",
+  "Hey. I'm ready when you are.",
+  "Hi! What are we tackling today?",
 ];
-function isDevQuestion(text) {
-  return DEV_PATTERNS.some((re) => re.test(text));
+function pickGreeting() {
+  return GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 }
-const DEV_REPLY =
-  "I was built by Harsh Shrivastava — he's the mind behind everything I am ❤️! " +
-  "You can reach him at hshrivastava23032007@gmail.com or connect with him on LinkedIn.";
 
-/* Greeting pool — picked randomly on each session */
-const GREETINGS = (name) => [
-  `Hey ${name}! I'm AIRA. Harsh built me to help you tackle tasks, practice interviews, or just chat. What's on your mind?`,
-  `Good to see you, ${name}! I'm AIRA, your smart assistant. Whether it's code, documents, or just a conversation—I'm ready when you are.`,
-  `Hey ${name}, I'm AIRA. I've been refining my skills and I'm ready to help with whatever you need. Where should we start?`,
-  `Welcome back, ${name}! I'm AIRA. Let's make some progress today. What can I do for you?`,
+/* ── Memory extraction heuristic ──
+   Quick check before making the async extract-memory API call.
+   Conservative: only triggers when the user message likely contains
+   stable personal information worth remembering. */
+const MEMORY_TRIGGERS = [
+  /\bmy name is\b/i,
+  /\bcall me\b/i,
+  /\bi(?:'m| am) working on\b/i,
+  /\bmy project\b/i,
+  /\bmy app\b/i,
+  /\bi prefer\b/i,
+  /\bi(?:'m| am) a\b/i,
+  /\bi(?:'m| am) learning\b/i,
+  /\bi(?:'m| am) studying\b/i,
+  /\bmy goal\b/i,
+  /\bi work (?:at|for|in)\b/i,
+  /\bmy team\b/i,
+  /\bmy company\b/i,
+  /\bi always\b/i,
+  /\bi usually\b/i,
+  /\bpreparing for\b/i,
 ];
-function pickGreeting(name) {
-  const pool = GREETINGS(name);
-  return pool[Math.floor(Math.random() * pool.length)];
+function mightContainMemory(text) {
+  return MEMORY_TRIGGERS.some((re) => re.test(text));
 }
 
 const HEADER_H = 70;
@@ -92,7 +178,17 @@ export default function Agent({ user }) {
   const greetedRef = useRef(false);
   const pendingGreetingRef = useRef(null); // New: Stores greeting until interaction
   const hasShownScoreRef = useRef(false);
+  const abortControllerRef = useRef(null);
+  const activeRequestIdRef = useRef(0);
+  const lastSubmittedTurnRef = useRef({ text: "", timestamp: 0 });
+  const handleUserSpeakRef = useRef(null);
+  const handleUserInterruptRef = useRef(null);
   const userName = user?.displayName?.split(" ")[0] || "there";
+
+  const voice = useVoice(
+    (transcript) => handleUserSpeakRef.current?.(transcript),
+    () => handleUserInterruptRef.current?.()
+  );
 
   const loadHistory = useCallback(async () => {
     if (user?.uid) {
@@ -116,13 +212,28 @@ export default function Agent({ user }) {
     setMessages(uiMessages);
   };
 
-  const deleteChatFromHistory = (e, id) => {
+  const deleteChatFromHistory = async (e, id) => {
     e.stopPropagation();
-    setHistory(prev => prev.filter(t => t.id !== id));
-    // If the active chat is deleted, we might want to reset the view
+    if (!user?.uid || !id) return;
+
+    const previousHistory = [...history];
+    setHistory((prev) => prev.filter((t) => t.id !== id));
+
     if (chatId === id) {
       setMessages([]);
       setChatId(null);
+      messageHistoryRef.current = [];
+    }
+
+    try {
+      const ok = await softDeleteThread(user.uid, id);
+      if (!ok) {
+        setHistory(previousHistory);
+        console.error("Failed to soft-delete conversation from database");
+      }
+    } catch (err) {
+      setHistory(previousHistory);
+      console.error("Error soft-deleting conversation:", err);
     }
   };
 
@@ -156,10 +267,15 @@ export default function Agent({ user }) {
     if (hasShownScoreRef.current) return null;
     const log = messageHistoryRef.current.map((m) => m.role + ": " + m.content);
     try {
+      const requestHeaders = { "Content-Type": "application/json" };
+      if (user?.getIdToken) {
+        const idToken = await user.getIdToken().catch(() => null);
+        if (idToken) requestHeaders["Authorization"] = `Bearer ${idToken}`;
+      }
       const resp = await fetch(API + "/evaluate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationLog: log, scenario }),
+        headers: requestHeaders,
+        body: JSON.stringify({ conversationLog: log, scenario, userId: user?.uid }),
       });
       const data = await resp.json();
       if (data.evaluation) {
@@ -175,10 +291,88 @@ export default function Agent({ user }) {
       console.error("Evaluation failed:", e);
     }
     return null;
-  }, [user?.uid]);
+  }, [user]);
+
+  /**
+   * extractMemoryIfNeeded — fire-and-forget background memory extraction.
+   *
+   * Called after AIRA responds to a user message. Only runs when the user
+   * message passes the mightContainMemory() heuristic. Makes one async API
+   * call to /api/extract-memory; if the LLM finds stable useful information,
+   * saves it via saveMemory() and updates local state. All errors are caught
+   * and logged silently — this must never interrupt the conversation flow.
+   */
+  const extractMemoryIfNeeded = useCallback(async (userMessage, currentMemory) => {
+    if (!user?.uid) return;
+    if (!mightContainMemory(userMessage)) return;
+
+    try {
+      const recentMessages = messageHistoryRef.current.slice(-8); // last 4 turns
+      const requestHeaders = { "Content-Type": "application/json" };
+      if (user?.getIdToken) {
+        const idToken = await user.getIdToken().catch(() => null);
+        if (idToken) requestHeaders["Authorization"] = `Bearer ${idToken}`;
+      }
+
+      const resp = await fetch(`${API_BASE}/api/extract-memory`, {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify({
+          recentMessages,
+          existingMemory: currentMemory || "",
+          userName,
+          userId: user.uid
+        })
+      });
+
+      if (!resp.ok) return; // fail silently
+
+      const data = await resp.json();
+      if (data.updatedMemory) {
+        await saveMemory(user.uid, data.updatedMemory);
+        setMemoryText(data.updatedMemory);
+        console.log("[Memory] Saved updated memory.");
+      }
+    } catch (err) {
+      console.warn("[Memory] Extraction failed (non-blocking):", err);
+    }
+  }, [user?.uid, userName]);
+
+  const handleUserInterrupt = useCallback(() => {
+    console.log("[Agent] Interruption handled -> cancelling in-flight request");
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    activeRequestIdRef.current += 1;
+  }, []);
 
   const handleUserSpeak = useCallback(async (transcript) => {
+    if (!transcript || typeof transcript !== "string") return;
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript) return;
+
+    // Idempotency turn guard: Ignore accidental duplicate transcript within 1200ms
+    const now = Date.now();
+    if (
+      lastSubmittedTurnRef.current &&
+      cleanTranscript.toLowerCase() === lastSubmittedTurnRef.current.text.toLowerCase() &&
+      now - lastSubmittedTurnRef.current.timestamp < 1200
+    ) {
+      console.log("[Agent] Suppressed rapid duplicate turn submission:", cleanTranscript);
+      return;
+    }
+    lastSubmittedTurnRef.current = { text: cleanTranscript, timestamp: now };
+
     voice.unlock(); 
+
+    // Cancel and abort previous in-flight AI request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const requestId = ++activeRequestIdRef.current;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     
     // If there's a pending greeting that hasn't been spoken yet, play it now
     if (pendingGreetingRef.current) {
@@ -186,25 +380,36 @@ export default function Agent({ user }) {
       pendingGreetingRef.current = null;
     }
 
-    addMessage("user", transcript);
-    messageHistoryRef.current.push({ role: "user", content: transcript });
+    addMessage("user", cleanTranscript);
+    messageHistoryRef.current.push({ role: "user", content: cleanTranscript });
     voice.setThinking();
 
     let currentChatId = chatId;
+    if (!currentChatId && user?.uid) {
+      currentChatId = await createNewThread(user.uid);
+      setChatId(currentChatId);
+    }
 
     /* ── Frontend intercepts (never need the backend) ── */
 
     // 0. Reset Session / Fresh Start
     const tLower = transcript.toLowerCase();
     if (tLower.includes("start fresh") || tLower.includes("new chat") || tLower.includes("reset") || tLower.includes("clear memory")) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      activeRequestIdRef.current += 1;
+      voice.cancelActiveSpeech();
+
       if (user?.uid) {
         currentChatId = await createNewThread(user.uid);
         setChatId(currentChatId);
       }
       setMessages([]);
       messageHistoryRef.current = [];
-      setFileContext(null); // clear file on reset
-      const reply = "Alright, starting fresh. What would you like to talk about?";
+      setFileContext(null);
+      const reply = "Done — clean slate. What do you want to work on?";
       addMessage("aira", reply);
       messageHistoryRef.current.push({ role: "assistant", content: reply });
       if (user?.uid && currentChatId) {
@@ -218,29 +423,21 @@ export default function Agent({ user }) {
       saveMessage(user.uid, currentChatId, "user", transcript);
     }
 
-    // 1. Developer identity
-    if (isDevQuestion(transcript)) {
-      addMessage("aira", DEV_REPLY);
-      if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", DEV_REPLY);
-      voice.speak(DEV_REPLY);
-      return;
-    }
-
-    // 2. Score request
+    // 1. Score request
     if (isScoreRequest(transcript) && evaluation) {
       setShowEvalPanel(true);
-      const reply = "Here's your session report! Check the panel on the right.";
+      const reply = "Here's your session report — check the panel on the right.";
       addMessage("aira", reply);
       if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply);
       voice.speak(reply);
       return;
     }
 
-    // 3. File-context Q&A — if a file is active, route question to /api/file
+    // 2. File-context Q&A — if a file is active, route question to /api/file-chat
     if (fileContext?.extractedText) {
       if (tLower.includes("remove file") || tLower.includes("clear file") || tLower.includes("close file") || tLower.includes("remove document")) {
         setFileContext(null);
-        const reply = "Done! I've removed the file. We're back to normal chat.";
+        const reply = "File removed. Back to normal chat.";
         addMessage("aira", reply);
         messageHistoryRef.current.push({ role: "assistant", content: reply });
         if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply);
@@ -252,6 +449,7 @@ export default function Agent({ user }) {
         const resp = await fetch(`${API_BASE}/api/file-chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             question: transcript,
             fileContent: fileContext.extractedText,
@@ -259,9 +457,13 @@ export default function Agent({ user }) {
           }),
         });
 
+        if (requestId !== activeRequestIdRef.current) return;
+
         if (!resp.ok) throw new Error("File API failed");
 
         const data = await resp.json();
+        if (requestId !== activeRequestIdRef.current) return;
+
         const reply = data.reply;
 
         messageHistoryRef.current.push({ role: "assistant", content: reply });
@@ -270,28 +472,63 @@ export default function Agent({ user }) {
         voice.speak(reply);
         return;
       } catch (err) {
+        if (err.name === "AbortError") return;
         console.error("File chat error:", err);
       }
     }
 
+    const tFinalize = performance.now();
+    if (import.meta.env.DEV) {
+      console.log(`[PERF] transcript-final: ${transcript}`);
+    }
+
     try {
-      const resp = await fetch(`${API_BASE}/api/chat`, {
+      const requestHeaders = { "Content-Type": "application/json" };
+      if (user?.getIdToken) {
+        const idToken = await user.getIdToken().catch(() => null);
+        if (idToken) requestHeaders["Authorization"] = `Bearer ${idToken}`;
+      }
+
+      const tReqStart = performance.now();
+      const resp = await fetchWithRetry(`${API_BASE}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: requestHeaders,
+        signal: controller.signal,
         body: JSON.stringify({ 
           messageHistory: messageHistoryRef.current, 
           userName, 
-          memory: memoryText 
+          memory: memoryText,
+          userId: user?.uid
         }),
       });
 
+      if (requestId !== activeRequestIdRef.current) {
+        console.log("[Agent] Stale response discarded");
+        return;
+      }
+
       if (!resp.ok) {
-        const errorText = await resp.text();
-        console.error(`Chat API error (${resp.status}):`, errorText);
-        throw new Error(`Server responded with ${resp.status}`);
+        const errorData = await resp.json().catch(() => ({}));
+        console.error(`[Agent API Error] Status ${resp.status}:`, errorData);
+        const error = new Error(errorData.error || errorData.userMessage || `HTTP ${resp.status}`);
+        error.status = resp.status;
+        error.category = errorData.category;
+        error.userMessage = errorData.userMessage;
+        error.retryAfter = errorData.retryAfter;
+        throw error;
       }
 
       const data = await resp.json();
+      const tResp = performance.now();
+      if (import.meta.env.DEV) {
+        console.log(`[PERF] chat-request: ${(tResp - tReqStart).toFixed(0)}ms`);
+      }
+
+      if (requestId !== activeRequestIdRef.current) {
+        console.log("[Agent] Stale response discarded");
+        return;
+      }
+
       const reply = data.reply || "Hmm, say that again?";
 
       messageHistoryRef.current.push({ role: "assistant", content: reply });
@@ -307,23 +544,55 @@ export default function Agent({ user }) {
         hasShownScoreRef.current = false;
       }
 
-      // 300ms delay before speaking for natural pacing
-      setTimeout(() => {
+      // Background memory extraction — fire and forget, never awaited.
+      extractMemoryIfNeeded(transcript, memoryText);
+
+      // Start TTS immediately without artificial delay
+      if (requestId === activeRequestIdRef.current) {
+        const tTtsStart = performance.now();
+        if (import.meta.env.DEV) {
+          console.log(`[PERF] tts-start: ${(tTtsStart - tResp).toFixed(0)}ms | total-time-to-first-speech: ${(tTtsStart - tFinalize).toFixed(0)}ms`);
+        }
         voice.speak(reply, async () => {
           if (data.intent === "end_session" || data.intent === "evaluate") {
             const scenario = currentScenario || data.scenario || "General Practice";
             await handleEvaluate(scenario);
           }
         });
-      }, 300);
+      }
     } catch (err) {
-      console.error("Chat error:", err);
-      const errMsg = "Oops, I couldn't reach the server. Check your connection?";
-      addMessage("aira", errMsg);
-      voice.speak(errMsg);
+      if (err.name === "AbortError") {
+        console.log("[Agent] AI Request cleanly aborted by user interruption");
+        return;
+      }
+      const classified = classifyError(err, { 
+        status: err.status,
+        category: err.category,
+        retryAfter: err.retryAfter
+      });
+      console.error("[Agent Chat Error]:", sanitizeLogDetails({
+        category: classified.category,
+        status: classified.statusCode,
+        message: err.message,
+        retryAfter: classified.retryAfter
+      }));
+
+      const errMsg = err.userMessage || classified.userMessage || ERROR_MESSAGES.GENERIC_RETRY;
+
+      if (requestId === activeRequestIdRef.current) {
+        addMessage("aira", errMsg);
+        voice.speak(errMsg);
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addMessage, handleEvaluate, evaluation, memoryText, userName, user?.uid, currentScenario, chatId, fileContext]);
+  }, [addMessage, handleEvaluate, extractMemoryIfNeeded, evaluation, memoryText, userName, user?.uid, currentScenario, chatId, fileContext, voice]);
+
+  useEffect(() => {
+    handleUserSpeakRef.current = handleUserSpeak;
+  }, [handleUserSpeak]);
+
+  useEffect(() => {
+    handleUserInterruptRef.current = handleUserInterrupt;
+  }, [handleUserInterrupt]);
 
   const splitText = (text, size = 4000) => {
     let chunks = [];
@@ -393,8 +662,6 @@ export default function Agent({ user }) {
     }
   };
 
-  const voice = useVoice(handleUserSpeak);
-
   // Sequential Auto-Activation Logic
   const handleActivation = useCallback(() => {
     if (hasStarted) return;
@@ -403,7 +670,7 @@ export default function Agent({ user }) {
     
     // Step 1: Unlock and Greeting
     voice.unlock();
-    const greeting = pickGreeting(userName);
+    const greeting = pickGreeting();
     addMessage("aira", greeting);
 
     // Step 2: Speak then start listening automatically
@@ -412,10 +679,10 @@ export default function Agent({ user }) {
         // Step 3: Auto-start listening after greeting finishes
         setTimeout(() => {
           voice.startListening();
-        }, 400); 
+        }, 400);
       });
     }, 300);
-  }, [hasStarted, userName, voice, addMessage]);
+  }, [hasStarted, voice, addMessage]);
 
   useEffect(() => {
     if (!user || greetedRef.current) return;
@@ -423,7 +690,51 @@ export default function Agent({ user }) {
     // We just mark it ready, activation handles the rest
   }, [user]);
 
+  // Network Connectivity Lifecycle
+  useEffect(() => {
+    let offlineTimeout = null;
+    const handleOffline = () => {
+      console.warn("[AIRA] Offline event detected");
+      offlineTimeout = setTimeout(() => {
+        addMessage("aira", ERROR_MESSAGES.OFFLINE);
+      }, 500);
+    };
+
+    const handleOnline = () => {
+      console.log("[AIRA] Online connection restored");
+      if (offlineTimeout) clearTimeout(offlineTimeout);
+      addMessage("aira", ERROR_MESSAGES.ONLINE_RESTORED);
+      voice.speak(ERROR_MESSAGES.ONLINE_RESTORED);
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      if (offlineTimeout) clearTimeout(offlineTimeout);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [addMessage, voice]);
+
+  // Session & Component Unmount Cleanup
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      activeRequestIdRef.current += 1;
+    };
+  }, []);
+
   const handleDisconnect = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    activeRequestIdRef.current += 1;
+    voice.cancelActiveSpeech();
     voice.stopListening();
     auth.signOut();
     navigate("/");
@@ -434,7 +745,9 @@ export default function Agent({ user }) {
     voice.state === "speaking" ? "#3b82f6"
       : voice.state === "listening" ? "#22d3ee"
         : voice.state === "thinking" ? "#a855f7"
-          : "#334155";
+          : voice.state === "interrupted" ? "#fb923c"
+            : voice.state === "error" ? "#ef4444"
+              : "#334155";
 
   const stateDotGlow =
     voice.state !== "idle" ? `0 0 7px ${stateDotColor}` : "none";
@@ -1022,12 +1335,19 @@ export default function Agent({ user }) {
               <button
                 onClick={async () => {
                   setShowUserMenu(false);
+                  if (abortControllerRef.current) {
+                    abortControllerRef.current.abort();
+                    abortControllerRef.current = null;
+                  }
+                  activeRequestIdRef.current += 1;
+                  voice.cancelActiveSpeech();
+
                   if (user?.uid) {
                     const newId = await createNewThread(user.uid);
                     setChatId(newId);
                     setMessages([]);
                     messageHistoryRef.current = [];
-                    const reply = "Alright, new chat started. What's on your mind?";
+                    const reply = "New conversation started. What's on your mind?";
                     addMessage("aira", reply);
                     voice.speak(reply);
                   }
@@ -1240,7 +1560,7 @@ export default function Agent({ user }) {
                             {thread.title || "New Conversation"}
                           </p>
                           <span style={{ fontSize: "0.68rem", color: "#94a3b8", fontWeight: 500 }}>
-                            {thread.lastUpdated?.toDate().toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                            {formatChatTimestamp(thread.createdAt || thread.lastUpdated)}
                           </span>
                         </div>
 
@@ -1264,12 +1584,19 @@ export default function Agent({ user }) {
               <div style={{ padding: 16, borderTop: "1px solid #f1f5f9" }}>
                 <button
                   onClick={async () => {
+                    if (abortControllerRef.current) {
+                      abortControllerRef.current.abort();
+                      abortControllerRef.current = null;
+                    }
+                    activeRequestIdRef.current += 1;
+                    voice.cancelActiveSpeech();
+
                     const newId = await createNewThread(user.uid);
                     setChatId(newId);
                     setMessages([]);
                     messageHistoryRef.current = [];
                     setShowHistory(false);
-                    voice.speak("Ready for a new session. What's on your mind?");
+                    voice.speak("Ready. What do you want to work on?");
                   }}
                   style={{
                     width: "100%", padding: "12px", borderRadius: 12,

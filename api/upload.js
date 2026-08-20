@@ -1,8 +1,7 @@
-import Groq from "groq-sdk";
+import { createGroqChatCompletion } from "./groqClient.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
 import Busboy from "busboy";
 import { createRequire } from "module";
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // Use createRequire for pdf-parse (CJS module)
 const require = createRequire(import.meta.url);
@@ -128,6 +127,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // Enforce Upload Rate Limiting
+  const rateLimitResult = await enforceRateLimit(req, res, RATE_LIMIT_POLICIES.upload);
+  if (!rateLimitResult.allowed) {
+    return;
+  }
+
   try {
     const { buffer, mimetype, originalName } = await parseMultipart(req);
 
@@ -164,15 +169,16 @@ export default async function handler(req, res) {
       "spokenSummary": "A short, natural 2-sentence spoken summary for text-to-speech"
     }`;
 
-    const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: summaryPrompt }],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.4,
-      max_tokens: 600,
-      response_format: { type: "json_object" },
-    });
+    const { content: rawContent } = await createGroqChatCompletion(
+      [{ role: "user", content: summaryPrompt }],
+      {
+        temperature: 0.4,
+        max_tokens: 600,
+        response_format: { type: "json_object" }
+      }
+    );
 
-    const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
+    const parsed = JSON.parse(rawContent || "{}");
 
     return res.status(200).json({
       success: true,

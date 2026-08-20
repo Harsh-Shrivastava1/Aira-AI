@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Paperclip, X, FileText, Image, File, Upload, Loader2, Sparkles, MessageCircle } from "lucide-react";
 
 import { API_BASE } from "../config/api";
+import { ERROR_MESSAGES } from "../services/errorRecoveryService";
 const API = `${API_BASE}/api`;
 
 const ACCEPT = ".pdf,.txt,.csv,.json,.md,.png,.jpg,.jpeg,.webp";
@@ -42,7 +43,9 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
     setError(null);
 
     if (file.size > MAX_SIZE) {
-      setError("File too large (max 10MB)");
+      setError(ERROR_MESSAGES.FILE_TOO_LARGE);
+      if (addMessage) addMessage("aira", ERROR_MESSAGES.FILE_TOO_LARGE);
+      if (voiceSpeak) voiceSpeak(ERROR_MESSAGES.FILE_TOO_LARGE);
       return;
     }
 
@@ -87,7 +90,10 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
       }
     } catch (err) {
       console.error("File processing error:", err);
-      setError(err.message || "Failed to process file");
+      const errMsg = err.message?.includes("type") ? ERROR_MESSAGES.FILE_UNSUPPORTED_TYPE : ERROR_MESSAGES.FILE_UPLOAD_FAILED;
+      setError(errMsg);
+      if (addMessage) addMessage("aira", errMsg);
+      if (voiceSpeak) voiceSpeak(errMsg);
     } finally {
       setUploading(false);
     }

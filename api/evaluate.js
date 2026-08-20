@@ -1,10 +1,15 @@
-import Groq from "groq-sdk";
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+import { createGroqChatCompletion } from "./groqClient.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Enforce Evaluation Rate Limiting
+  const rateLimitResult = await enforceRateLimit(req, res, RATE_LIMIT_POLICIES.evaluate);
+  if (!rateLimitResult.allowed) {
+    return;
   }
 
   try {
@@ -27,18 +32,18 @@ Output MUST BE ONLY Valid JSON matching this structure:
   "improvementNotes": "string"
 }`;
 
-    const completion = await groq.chat.completions.create({
-      messages: [
+    const { content: resultString } = await createGroqChatCompletion(
+      [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Conversation Log:\n${JSON.stringify(conversationLog)}` }
       ],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.1,
-      response_format: { type: "json_object" }
-    });
+      {
+        temperature: 0.1,
+        response_format: { type: "json_object" }
+      }
+    );
 
-    const resultString = completion.choices[0]?.message?.content;
-    const evaluation = JSON.parse(resultString);
+    const evaluation = JSON.parse(resultString || "{}");
 
     return res.status(200).json({ evaluation });
   } catch (error) {

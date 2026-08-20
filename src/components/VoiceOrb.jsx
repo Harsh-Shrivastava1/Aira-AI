@@ -52,6 +52,28 @@ const CFGS = {
       { c: ["#a855f7aa", "#6366f166"], amp: 18, freq: 3.2, spd: 2.8, tk: 8 },
     ],
   },
+  interrupted: {
+    border: "rgba(251,146,60,0.4)",
+    glow1: "rgba(251,146,60,0.28)", glow2: "rgba(251,146,60,0.1)",
+    glowR: [265, 330],
+    pulse: { scale: [1, 1.03, 1], dur: 1.5 },
+    ring: "rgba(251,146,60,0.2)",
+    waves: [
+      { c: ["#fb923caa", "#f9731688"], amp: 16, freq: 2.2, spd: 1.2, tk: 10 },
+      { c: ["#f9731688", "#fbbf2466"], amp: 12, freq: 2.8, spd: 0.9, tk: 7 },
+    ],
+  },
+  error: {
+    border: "rgba(239,68,68,0.4)",
+    glow1: "rgba(239,68,68,0.22)", glow2: "rgba(239,68,68,0.08)",
+    glowR: [260, 320],
+    pulse: { scale: [1, 1.02, 1], dur: 3 },
+    ring: "rgba(239,68,68,0.18)",
+    waves: [
+      { c: ["#ef4444aa", "#f8717188"], amp: 8, freq: 1.5, spd: 0.3, tk: 8 },
+      { c: ["#f8717188", "#fca5a566"], amp: 6, freq: 2.0, spd: 0.2, tk: 5 },
+    ],
+  },
 };
 
 /* ── Canvas waveform renderer ── */
@@ -201,13 +223,24 @@ function OrbitalParticles({ state }) {
 
   const isActive = state !== "idle";
 
+  const particleColor =
+    state === "thinking"
+      ? "#a855f7"
+      : state === "listening"
+      ? "#38bdf8"
+      : state === "interrupted"
+      ? "#fb923c"
+      : state === "error"
+      ? "#ef4444"
+      : "#6366f1";
+
   return particles.map((p) => (
     <motion.div
       key={p.id}
       style={{
         position: "absolute", borderRadius: "50%", pointerEvents: "none",
         width: p.size, height: p.size,
-        background: state === "thinking" ? "#a855f7" : state === "listening" ? "#38bdf8" : "#6366f1",
+        background: particleColor,
         filter: `blur(${p.size > 3 ? 1 : 0}px)`,
       }}
       animate={{
@@ -227,13 +260,21 @@ export default function VoiceOrb({ state, toggleListening, thinkingMessage }) {
   const cfgRef = useRef(cfg);
   useEffect(() => { cfgRef.current = CFGS[state] ?? CFGS.idle; }, [state]);
 
-  const stateLabel = state === "listening" ? "Listening..." :
+  const stateLabel =
+    state === "listening" ? "Listening..." :
     state === "thinking" ? (thinkingMessage || "Thinking...") :
-    state === "speaking" ? "Speaking..." : "AIRA IS READY";
+    state === "speaking" ? "Speaking..." :
+    state === "interrupted" ? "Interrupted" :
+    state === "error" ? (thinkingMessage || "Connection Issue") :
+    "AIRA IS READY";
 
-  const labelColor = state === "idle" ? "#94a3b8" :
+  const labelColor =
+    state === "idle" ? "#94a3b8" :
     state === "thinking" ? "#a855f7" :
-    state === "listening" ? "#38bdf8" : "#6366f1";
+    state === "listening" ? "#38bdf8" :
+    state === "interrupted" ? "#fb923c" :
+    state === "error" ? "#ef4444" :
+    "#6366f1";
 
   return (
     <div style={{
@@ -443,7 +484,7 @@ export default function VoiceOrb({ state, toggleListening, thinkingMessage }) {
       {/* ── State label ── */}
       <AnimatePresence mode="wait">
         <motion.div
-          key={state + (state === "thinking" ? thinkingMessage : "")}
+          key={state + (state === "thinking" || state === "error" ? thinkingMessage : "")}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
