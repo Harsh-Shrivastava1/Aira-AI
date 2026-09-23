@@ -27,6 +27,7 @@ coverage/
 tmp/
 temp/
 *.tmp
+scratch/
 
 # OS/editor files
 .DS_Store

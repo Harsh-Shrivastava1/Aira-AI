@@ -74,6 +74,35 @@ export function getFirebaseAdmin() {
  */
 const testFirestoreStore = new Map();
 
+function createInMemoryDocRef(path) {
+  return {
+    get: async () => {
+      const data = testFirestoreStore.get(path);
+      return {
+        exists: !!data,
+        data: () => data || null,
+      };
+    },
+    set: async (data, options) => {
+      if (options?.merge && testFirestoreStore.has(path)) {
+        testFirestoreStore.set(path, { ...testFirestoreStore.get(path), ...data });
+      } else {
+        testFirestoreStore.set(path, data);
+      }
+    },
+    delete: async () => {
+      testFirestoreStore.delete(path);
+    },
+    collection: (subCol) => createInMemoryColRef(`${path}/${subCol}`),
+  };
+}
+
+function createInMemoryColRef(colPath) {
+  return {
+    doc: (docId) => createInMemoryDocRef(`${colPath}/${docId}`),
+  };
+}
+
 /**
  * Get Firestore database instance.
  */
@@ -81,30 +110,7 @@ export function getAdminDb() {
   // If test mode is enabled, provide an in-memory document store matching Firestore API
   if (process.env.AIRA_TEST_MODE === "true") {
     return {
-      collection: (colName) => ({
-        doc: (docId) => ({
-          get: async () => {
-            const key = `${colName}/${docId}`;
-            const data = testFirestoreStore.get(key);
-            return {
-              exists: !!data,
-              data: () => data || null,
-            };
-          },
-          set: async (data, options) => {
-            const key = `${colName}/${docId}`;
-            if (options?.merge && testFirestoreStore.has(key)) {
-              testFirestoreStore.set(key, { ...testFirestoreStore.get(key), ...data });
-            } else {
-              testFirestoreStore.set(key, data);
-            }
-          },
-          delete: async () => {
-            const key = `${colName}/${docId}`;
-            testFirestoreStore.delete(key);
-          },
-        }),
-      }),
+      collection: (colName) => createInMemoryColRef(colName),
       _clearTestStore: () => testFirestoreStore.clear(),
       _getTestStore: () => testFirestoreStore,
     };
@@ -116,30 +122,9 @@ export function getAdminDb() {
   } catch (err) {
     console.warn("[Firebase Admin Firestore] Fallback to in-memory store:", err.message);
     return {
-      collection: (colName) => ({
-        doc: (docId) => ({
-          get: async () => {
-            const key = `${colName}/${docId}`;
-            const data = testFirestoreStore.get(key);
-            return {
-              exists: !!data,
-              data: () => data || null,
-            };
-          },
-          set: async (data, options) => {
-            const key = `${colName}/${docId}`;
-            if (options?.merge && testFirestoreStore.has(key)) {
-              testFirestoreStore.set(key, { ...testFirestoreStore.get(key), ...data });
-            } else {
-              testFirestoreStore.set(key, data);
-            }
-          },
-          delete: async () => {
-            const key = `${colName}/${docId}`;
-            testFirestoreStore.delete(key);
-          },
-        }),
-      }),
+      collection: (colName) => createInMemoryColRef(colName),
+      _clearTestStore: () => testFirestoreStore.clear(),
+      _getTestStore: () => testFirestoreStore,
     };
   }
 }

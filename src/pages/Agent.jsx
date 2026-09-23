@@ -7,7 +7,7 @@ import TransientChatBox from "../components/TransientChatBox";
 import MinimalEvaluationOverlay from "../components/MinimalEvaluationOverlay";
 import FileUpload from "../components/FileUpload";
 import { useVoice } from "../hooks/useVoice";
-import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fetchMemory, saveMemory, saveSessionEvaluation, fetchAllThreads, softDeleteThread } from "../hooks/useFirestore";
+import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fetchMemory, saveMemory, saveThreadSummary, fetchThreadSummary, saveSessionEvaluation, fetchAllThreads, softDeleteThread } from "../hooks/useFirestore";
 import { auth } from "../config/firebase";
 import { API_BASE } from "../config/api";
 import { classifyError, sanitizeLogDetails, ERROR_MESSAGES } from "../services/errorRecoveryService";
@@ -111,14 +111,24 @@ function pickGreeting() {
 
 /* ── Memory extraction heuristic ──
    Quick check before making the async extract-memory API call.
-   Conservative: only triggers when the user message likely contains
-   stable personal information worth remembering. */
+   Triggers when the user message likely contains stable personal/project information worth remembering. */
 const MEMORY_TRIGGERS = [
+  /\bremember\b/i,
+  /\bkeep in mind\b/i,
+  /\bdon't forget\b/i,
   /\bmy name is\b/i,
   /\bcall me\b/i,
   /\bi(?:'m| am) working on\b/i,
+  /\bi(?:'m| am) (?:building|developing|creating|making)\b/i,
+  /\bi (?:built|developed|created|made)\b/i,
+  /\b(?:i(?:'m| am) using|we use|i use)\b/i,
   /\bmy project\b/i,
   /\bmy app\b/i,
+  /\bmy portal\b/i,
+  /\bmy (?:stack|tech|database|backend|frontend|framework)\b/i,
+  /\b(?:backend|database|frontend) (?:is|uses|runs on)\b/i,
+  /\b(?:switched|migrated|changed) (?:to|our|my)\b/i,
+  /\bfrom now on\b/i,
   /\bi prefer\b/i,
   /\bi(?:'m| am) a\b/i,
   /\bi(?:'m| am) learning\b/i,
@@ -130,6 +140,8 @@ const MEMORY_TRIGGERS = [
   /\bi always\b/i,
   /\bi usually\b/i,
   /\bpreparing for\b/i,
+  /\bmy internship\b/i,
+  /\binternship portal\b/i,
 ];
 function mightContainMemory(text) {
   return MEMORY_TRIGGERS.some((re) => re.test(text));
@@ -188,6 +200,8 @@ export default function Agent({ user }) {
   }, []);
   const [currentScenario, setCurrentScenario] = useState(null);
   const [memoryText, setMemoryText] = useState(null);
+  const memoryTextRef = useRef(null);
+  const threadSummaryRef = useRef(null);
   const [chatId, setChatId] = useState(null);
   const [fileContext, setFileContext] = useState(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -220,6 +234,11 @@ export default function Agent({ user }) {
   const openThread = async (id) => {
     setChatId(id);
     setShowHistory(false);
+    if (user?.uid) {
+      fetchThreadSummary(user.uid, id).then((sum) => {
+        threadSummaryRef.current = sum;
+      });
+    }
     const threadHistory = await fetchThreadMessages(user.uid, id, 30);
     messageHistoryRef.current = threadHistory;
     const uiMessages = threadHistory.map((msg, idx) => ({
@@ -259,10 +278,16 @@ export default function Agent({ user }) {
 
   useEffect(() => {
     if (user?.uid) {
-      fetchMemory(user.uid).then((m) => setMemoryText(m));
+      fetchMemory(user.uid).then((m) => {
+        setMemoryText(m);
+        memoryTextRef.current = m;
+      });
 
       getActiveChatId(user.uid).then(async (id) => {
         setChatId(id);
+        fetchThreadSummary(user.uid, id).then((sum) => {
+          threadSummaryRef.current = sum;
+        });
         const history = await fetchThreadMessages(user.uid, id, 15);
         if (history.length > 0) {
           messageHistoryRef.current = history;
@@ -406,8 +431,9 @@ export default function Agent({ user }) {
 
       const data = await resp.json();
       if (data.updatedMemory) {
-        await saveMemory(user.uid, data.updatedMemory);
+        await saveMemory(user.uid, data);
         setMemoryText(data.updatedMemory);
+        memoryTextRef.current = data.updatedMemory;
         console.log("[Memory] Saved updated memory.");
       }
     } catch (err) {
@@ -577,8 +603,10 @@ export default function Agent({ user }) {
         body: JSON.stringify({ 
           messageHistory: messageHistoryRef.current, 
           userName, 
-          memory: memoryText,
-          userId: user?.uid
+          memory: memoryTextRef.current || memoryText,
+          userId: user?.uid,
+          chatId: currentChatId || chatId,
+          conversationSummary: threadSummaryRef.current || null
         }),
       });
 

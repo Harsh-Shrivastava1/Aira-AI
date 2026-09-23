@@ -1,5 +1,12 @@
 import { createGroqChatCompletion } from "./_lib/groqClient.js";
 import { enforceRateLimit, RATE_LIMIT_POLICIES, isOperationDuplicate, getUserIdentifier, getClientIp } from "./_lib/rateLimiter.js";
+import { verifyUserToken } from "./_lib/firebaseAdmin.js";
+import {
+  parseMemoryLines,
+  mergeAndDeduplicateMemories,
+  saveUserMemoryToFirestore,
+  fetchUserMemoryFromFirestore
+} from "./_lib/memoryService.js";
 
 /**
  * Programmatic redaction filter to guarantee no API keys, tokens, or credentials
@@ -21,6 +28,14 @@ function sanitizeMemory(memoryText) {
   return cleaned.trim() || null;
 }
 
+/**
+ * Filter out temporary conversational statements (e.g., "I'm tired", "I feel sick", "Good morning")
+ */
+function isTemporaryStatement(text) {
+  if (!text || typeof text !== "string") return false;
+  return /\b(i('m| am| feel) (?:tired|sleepy|bored|hungry|sick|exhausted|busy right now|leaving)|good (?:morning|night|afternoon)|how are you|test|testing)\b/i.test(text);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -29,67 +44,85 @@ export default async function handler(req, res) {
   // Enforce Background Memory Extraction Rate Limiting
   const rateLimitResult = await enforceRateLimit(req, res, RATE_LIMIT_POLICIES.extractMemory);
   if (!rateLimitResult.allowed) {
-    // Return 200 with null so the frontend is never interrupted
     return res.status(200).json({ updatedMemory: null });
   }
 
   try {
-    const { recentMessages, existingMemory, userName } = req.body;
+    const { recentMessages, existingMemory: clientMemory, userName, userId: clientUserId } = req.body || {};
 
     if (!recentMessages || recentMessages.length === 0) {
       return res.status(200).json({ updatedMemory: null });
     }
 
+    // Resolve authenticated user ID
+    let effectiveUid = clientUserId || null;
+    const authResult = await verifyUserToken(req).catch(() => ({ authenticated: false }));
+    if (authResult.authenticated && authResult.user?.uid) {
+      effectiveUid = authResult.user.uid;
+    }
+
     // Deduplicate rapid identical extraction calls for the same user turns
-    const userIdentifier = getUserIdentifier(req) || getClientIp(req);
-    const lastContent = recentMessages.slice(-2).map((m) => m.content).join("|");
+    const userIdentifier = effectiveUid || getUserIdentifier(req) || getClientIp(req);
+    const lastContent = recentMessages.slice(-2).map((m) => m?.content || "").join("|");
     const dedupKey = `dedup:mem:${userIdentifier}:${lastContent}`;
-    if (isOperationDuplicate(dedupKey, 30)) {
+    if (isOperationDuplicate(dedupKey, 20)) {
+      return res.status(200).json({ updatedMemory: null });
+    }
+
+    // Load server-side authoritative memory if client memory is missing
+    let currentMemory = clientMemory || "";
+    if (!currentMemory && effectiveUid) {
+      const serverMemory = await fetchUserMemoryFromFirestore(effectiveUid);
+      if (serverMemory) {
+        currentMemory = serverMemory;
+      }
+    }
+
+    // Quick filter: Check if last user message is just a temporary statement
+    const lastUserMessage = recentMessages.filter((m) => m?.role === "user").slice(-1)[0]?.content || "";
+    if (isTemporaryStatement(lastUserMessage) && !/\b(remember|project|app|stack|database)\b/i.test(lastUserMessage)) {
       return res.status(200).json({ updatedMemory: null });
     }
 
     const systemPrompt = `You are a memory extraction assistant for AIRA, an AI voice assistant.
 
-Review the conversation below and decide whether it contains stable, useful information about the user that AIRA should remember across future sessions.
+Review the conversation below and decide whether it contains stable, durable, useful information about the user that AIRA should remember across future sessions.
 
-━━━ WHAT TO EXTRACT (stable, useful facts only) ━━━
-- User's preferred name or nickname (if different from their login name)
-- Ongoing projects (name, tech stack, goals)
-- Long-term career goals or aspirations
-- Stable preferences (communication style, preferred languages, tools, frameworks)
-- Recurring work or study context ("I'm a backend engineer", "I'm preparing for FAANG interviews")
-- Important non-sensitive personal context that will help future conversations
+━━━ WHAT TO EXTRACT (durable, useful facts only) ━━━
+- User's preferred name or nickname (if different from login)
+- Ongoing or mentioned projects (project name, tech stack, database, architecture, framework, goals)
+- Technology preferences (languages, frameworks, tools, databases, e.g. "prefers React and TypeScript", "internship portal uses MongoDB")
+- Stable career or study context (role, company, university, target interviews)
+- Explicit instructions: When the user says "Remember that...", ALWAYS extract the exact fact with top priority.
 
 ━━━ NEVER EXTRACT (hard rules) ━━━
-- Passwords, API keys, tokens, secrets, credentials of any kind
-- Financial information
-- Sensitive personal information
-- Temporary conversation details (today's bug, this hour's question)
-- One-off statements unlikely to matter in future sessions
-- Full conversation transcripts or summaries of what was discussed
+- Temporary states: "I'm tired today", "I feel sleepy", "It's cold", "I will eat later"
+- Passwords, API keys, tokens, credentials, financial details
+- Conversational filler, greetings, or questions asked by the user
 
-━━━ MEMORY QUALITY RULES ━━━
-1. If nothing new and stable was shared → return {"updatedMemory": null}
-2. Merge new facts into the existing memory. Do not duplicate.
-3. If existing memory already has the same fact, do not add it again.
-4. If new information clearly supersedes old (e.g., user changed their project), update it.
-5. Keep total memory under 300 words. Use bullet points or short sentences.
-6. Do not overwrite existing memory entries unless superseded.
-7. Preserve all existing memory that is still relevant.
+━━━ QUALITY & CONFLICT RULES ━━━
+1. If the user states a new fact that contradicts or updates an older fact (e.g. "I switched to MongoDB"), output the NEW information clearly.
+2. Do not duplicate facts that are already in CURRENT MEMORY.
+3. Keep facts short, clear, and objective (bullet points).
+4. If nothing new or durable was shared → return {"newFacts": []}
 
 ━━━ CURRENT MEMORY ━━━
-${existingMemory ? existingMemory : "(No existing memory for this user)"}
+${currentMemory ? currentMemory : "(No existing memory for this user)"}
 
 ━━━ OUTPUT FORMAT ━━━
-Return ONLY valid JSON. No markdown, no extra text:
-{"updatedMemory": "Updated memory text here as bullet points or short lines"}
-
-If nothing worth saving: {"updatedMemory": null}`;
+Return ONLY valid JSON (no markdown fences):
+{
+  "newFacts": ["User is building a project called Pulse using React Native and Expo.", "User's internship portal uses MongoDB Atlas."]
+}
+If nothing new to remember:
+{
+  "newFacts": []
+}`;
 
     const conversationText = recentMessages
-      .map(m => {
-        const speaker = m.role === "assistant" ? "AIRA" : (userName || "User");
-        return `${speaker}: ${m.content}`;
+      .map((m) => {
+        const speaker = m?.role === "assistant" ? "AIRA" : (userName || "User");
+        return `${speaker}: ${m?.content || ""}`;
       })
       .join("\n");
 
@@ -100,27 +133,52 @@ If nothing worth saving: {"updatedMemory": null}`;
       ],
       {
         temperature: 0.1,
-        max_tokens: 400,
+        max_tokens: 350,
         response_format: { type: "json_object" }
       }
     );
 
     const result = JSON.parse(rawContent || "{}");
-    const rawUpdatedMemory = result.updatedMemory || null;
+    const newFacts = Array.isArray(result.newFacts) ? result.newFacts : [];
 
-    // Sanitize to guarantee credential privacy
-    const updatedMemory = sanitizeMemory(rawUpdatedMemory);
-
-    // If the LLM returned null or the same memory, signal no update needed
-    if (!updatedMemory || updatedMemory.trim() === (existingMemory || "").trim()) {
+    if (newFacts.length === 0) {
       return res.status(200).json({ updatedMemory: null });
     }
 
-    return res.status(200).json({ updatedMemory });
+    // Merge, deduplicate, and resolve conflicts with existing memory
+    const existingLines = parseMemoryLines(currentMemory);
+    const sanitizedNewFacts = newFacts
+      .map((f) => sanitizeMemory(f))
+      .filter((f) => f && f.length > 5);
+
+    if (sanitizedNewFacts.length === 0) {
+      return res.status(200).json({ updatedMemory: null });
+    }
+
+    const mergedLines = mergeAndDeduplicateMemories(existingLines, sanitizedNewFacts);
+    const updatedMemory = mergedLines.map((l) => `- ${l}`).join("\n");
+
+    // If unchanged, return null
+    if (updatedMemory.trim() === currentMemory.trim()) {
+      return res.status(200).json({ updatedMemory: null });
+    }
+
+    // Persist directly to Firestore server-side if user is authenticated
+    if (effectiveUid) {
+      await saveUserMemoryToFirestore(effectiveUid, updatedMemory);
+    }
+
+    return res.status(200).json({
+      updatedMemory,
+      items: mergedLines.map((fact, index) => ({
+        id: `mem_${index}_${Buffer.from(fact.slice(0, 20)).toString("hex").slice(0, 8)}`,
+        fact,
+        updatedAt: new Date().toISOString()
+      }))
+    });
 
   } catch (error) {
-    console.error("[extract-memory] Error:", error);
-    // Always return 200 — memory extraction must never fail the caller
+    console.error("[extract-memory] Error:", error.message);
     return res.status(200).json({ updatedMemory: null });
   }
 }

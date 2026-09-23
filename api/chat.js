@@ -4,109 +4,13 @@ import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./_lib/rateLimiter.js";
 import { getGmailStatus, searchEmails, sendEmail, replyToThread } from "./_lib/gmailService.js";
 import { isEmailRelated, detectEmailIntent, extractGmailSearchQuery, findRecentEmailDraft, isValidEmailAddress } from "./_lib/emailHelper.js";
 import { verifyUserToken } from "./_lib/firebaseAdmin.js";
-
-/**
- * Stop words to exclude during token extraction
- */
-const STOP_WORDS = new Set([
-  "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
-  "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can",
-  "can't", "cannot", "could", "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down",
-  "during", "each", "few", "for", "from", "further", "had", "hadn't", "has", "hasn't", "have", "haven't",
-  "having", "he", "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself", "him", "himself",
-  "his", "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it", "it's",
-  "its", "itself", "let's", "me", "more", "most", "mustn't", "my", "myself", "no", "nor", "not", "of", "off",
-  "on", "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "same",
-  "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some", "such", "than", "that",
-  "that's", "the", "their", "theirs", "them", "themselves", "then", "there", "there's", "these", "they",
-  "they'd", "they'll", "they're", "they've", "this", "those", "through", "to", "too", "under", "until", "up",
-  "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were", "weren't", "what", "what's",
-  "when", "when's", "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with",
-  "won't", "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself",
-  "yourselves", "tell", "show", "give", "help", "want", "like", "know", "think", "make", "get", "just"
-]);
-
-/**
- * Extract meaningful semantic tokens from a text string
- */
-function extractTokens(text) {
-  if (!text) return new Set();
-  const words = text
-    .toLowerCase()
-    .replace(/[^\w\s+#.-]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length > 1 && !STOP_WORDS.has(w));
-  return new Set(words);
-}
-
-/**
- * Server-Side Memory Relevance Retrieval
- * 
- * Filters raw long-term user memory down to ONLY facts relevant to the current
- * turn/conversation context. Prevents injecting the entire memory document into
- * the LLM context, reducing token usage and eliminating cross-topic hallucination.
- * 
- * @param {string} rawMemory - Full stored memory document
- * @param {Array} messageHistory - Recent conversation turns
- * @returns {string} Filtered relevant memories
- */
-function retrieveRelevantMemories(rawMemory, messageHistory = []) {
-  if (!rawMemory || typeof rawMemory !== "string" || !rawMemory.trim()) {
-    return "No custom session memory for this turn.";
-  }
-
-  const memoryLines = rawMemory
-    .split(/\n+/)
-    .map((l) => l.trim().replace(/^[-*•]\s*/, ""))
-    .filter(Boolean);
-
-  if (memoryLines.length === 0) {
-    return "No custom session memory for this turn.";
-  }
-
-  if (memoryLines.length <= 2 && rawMemory.length < 150) {
-    return memoryLines.map((l) => `- ${l}`).join("\n");
-  }
-
-  const recentUserTurns = messageHistory
-    .slice(-4)
-    .filter((m) => m.role === "user" || m.role === "assistant")
-    .map((m) => m.content)
-    .join(" ");
-
-  const queryTokens = extractTokens(recentUserTurns);
-  const scoredMemories = [];
-
-  for (const line of memoryLines) {
-    const lineLower = line.toLowerCase();
-    const lineTokens = extractTokens(line);
-
-    let score = 0;
-    for (const token of lineTokens) {
-      if (queryTokens.has(token)) {
-        score += 4;
-      }
-    }
-
-    const isPreference = /\b(prefer|concise|communication|explanation|nickname|call me|name is)\b/i.test(lineLower);
-    if (isPreference) {
-      score += 2;
-    }
-
-    if (score >= 2) {
-      scoredMemories.push({ line, score });
-    }
-  }
-
-  scoredMemories.sort((a, b) => b.score - a.score);
-  const topFacts = scoredMemories.slice(0, 4).map((item) => `- ${item.line}`);
-
-  if (topFacts.length === 0) {
-    return "No custom session memory relevant to this turn.";
-  }
-
-  return topFacts.join("\n");
-}
+import {
+  retrieveRelevantMemories,
+  fetchUserMemoryFromFirestore,
+  fetchThreadSummaryFromFirestore,
+  generateThreadSummary,
+  saveThreadSummaryToFirestore
+} from "./_lib/memoryService.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -120,11 +24,27 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { messageHistory, userName, memory } = req.body;
+    const { messageHistory, userName, memory: clientMemory, chatId, conversationSummary: clientSummary } = req.body || {};
 
     // Verify Firebase identity server-side (never trust arbitrary client-supplied body UID)
-    const authResult = await verifyUserToken(req);
+    const authResult = await verifyUserToken(req).catch(() => ({ authenticated: false }));
     const verifiedUid = authResult.authenticated && authResult.user?.uid ? authResult.user.uid : null;
+    const effectiveUid = verifiedUid || req.body?.userId || null;
+
+    // Load server-side authoritative memory if client memory is missing
+    let effectiveMemory = clientMemory || "";
+    if (!effectiveMemory && effectiveUid) {
+      const serverMemory = await fetchUserMemoryFromFirestore(effectiveUid);
+      if (serverMemory) {
+        effectiveMemory = serverMemory;
+      }
+    }
+
+    // Load conversation summary for the active thread if available
+    let threadSummary = clientSummary || null;
+    if (!threadSummary && effectiveUid && chatId) {
+      threadSummary = await fetchThreadSummaryFromFirestore(effectiveUid, chatId);
+    }
 
     const latestUserTurn = (messageHistory || [])
       .filter((m) => m.role === "user")
@@ -254,11 +174,16 @@ CRITICAL INSTRUCTIONS FOR GMAIL CONTEXT:
     const profileMemoryItem = getCategoryProfileMemory(latestUserTurn, messageHistory);
 
     // 2. Filter session memory server-side
-    const sessionMemory = retrieveRelevantMemories(memory, messageHistory);
+    const sessionMemory = retrieveRelevantMemories(effectiveMemory, messageHistory);
+
+    let summaryBlock = "";
+    if (threadSummary) {
+      summaryBlock = `\n\n=== CONVERSATION SUMMARY (EARLIER IN THIS THREAD) ===\n${threadSummary}`;
+    }
 
     const relevantMemoryBlock = profileMemoryItem
-      ? `=== RELEVANT CONTEXT (SILENT BACKGROUND CONTEXT — NOT A SCRIPT) ===\n${profileMemoryItem.content}\n\n=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${emailContextBlock}`
-      : `=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${emailContextBlock}`;
+      ? `=== RELEVANT CONTEXT (SILENT BACKGROUND CONTEXT — NOT A SCRIPT) ===\n${profileMemoryItem.content}\n\n=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${summaryBlock}${emailContextBlock}`
+      : `=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${summaryBlock}${emailContextBlock}`;
 
     const systemPrompt = `You are AIRA — a voice-first AI assistant. You are intelligent, calm, warm, confident, socially aware, and direct. You feel like a real person having a natural, capable conversation with an engineering peer, not a scripted customer-support chatbot.
 
@@ -402,6 +327,17 @@ END
       if (subject !== "..." && body !== "..." && subject.length > 2 && body.length > 5) {
         finalEmailDraft = { to, subject, body, threadId };
       }
+    }
+
+    // Periodically update conversation summary asynchronously for long threads
+    if (messageHistory && messageHistory.length >= 6 && messageHistory.length % 4 === 0 && effectiveUid && chatId) {
+      generateThreadSummary(messageHistory, threadSummary)
+        .then((newSummary) => {
+          if (newSummary) {
+            saveThreadSummaryToFirestore(effectiveUid, chatId, newSummary);
+          }
+        })
+        .catch(() => {});
     }
 
     return res.status(200).json({

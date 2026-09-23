@@ -193,34 +193,71 @@ export const fetchThreadMessages = async (uid, chatId, count = 20) => {
   }
 };
 
-// ─── Save / update user memory string ───────────────────────────
-export const saveMemory = async (uid, memoryText) => {
-  if (!auth.currentUser) return;
+// ─── Save / update user memory string and structured items ─────────
+export const saveMemory = async (uid, memoryData) => {
+  if (!auth.currentUser || !uid) return;
   try {
+    const memoryText = typeof memoryData === "string" ? memoryData : memoryData?.text || "";
     await setDoc(doc(db, "users", uid, "memory", "core"), {
       text: memoryText,
       updatedAt: serverTimestamp()
-    });
+    }, { merge: true });
+
+    // If structured items are provided, write them into the memories subcollection
+    if (memoryData && Array.isArray(memoryData.items)) {
+      for (const item of memoryData.items) {
+        if (!item || !item.id) continue;
+        await setDoc(doc(db, "users", uid, "memories", item.id), {
+          ...item,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
+    }
   } catch (e) {
-    console.warn("saveMemory failed:", e.code);
+    console.warn("saveMemory failed:", e.code || e.message);
   }
 };
 
 // ─── Fetch user memory string ────────────────────────────────────
 export const fetchMemory = async (uid) => {
-  if (!auth.currentUser) return null;
+  if (!auth.currentUser || !uid) return null;
   try {
     const snap = await getDoc(doc(db, "users", uid, "memory", "core"));
     return snap.exists() ? snap.data().text : null;
   } catch (e) {
-    console.warn("fetchMemory failed:", e.code);
+    console.warn("fetchMemory failed:", e.code || e.message);
+    return null;
+  }
+};
+
+// ─── Save conversation summary to thread ───────────────────────────
+export const saveThreadSummary = async (uid, chatId, summary) => {
+  if (!auth.currentUser || !uid || !chatId || !summary) return;
+  try {
+    await setDoc(doc(db, "users", uid, "threads", chatId), {
+      summary,
+      summaryUpdatedAt: serverTimestamp()
+    }, { merge: true });
+  } catch (e) {
+    console.warn("saveThreadSummary failed:", e.code || e.message);
+  }
+};
+
+// ─── Fetch conversation summary from thread ─────────────────────────
+export const fetchThreadSummary = async (uid, chatId) => {
+  if (!auth.currentUser || !uid || !chatId) return null;
+  try {
+    const snap = await getDoc(doc(db, "users", uid, "threads", chatId));
+    return snap.exists() && snap.data().summary ? snap.data().summary : null;
+  } catch (e) {
+    console.warn("fetchThreadSummary failed:", e.code || e.message);
     return null;
   }
 };
 
 // ─── Save session evaluation ────────────────────────────────────────
 export const saveSessionEvaluation = async (uid, sessionId, evaluation, scenario) => {
-  if (!auth.currentUser) return;
+  if (!auth.currentUser || !uid) return;
   try {
     await setDoc(doc(db, "users", uid, "performance", sessionId), {
       ...evaluation,
@@ -228,6 +265,6 @@ export const saveSessionEvaluation = async (uid, sessionId, evaluation, scenario
       timestamp: serverTimestamp()
     });
   } catch (e) {
-    console.warn("saveSessionEvaluation failed:", e.code);
+    console.warn("saveSessionEvaluation failed:", e.code || e.message);
   }
 };
