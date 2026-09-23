@@ -1,52 +1,30 @@
 import { google } from "googleapis";
-import crypto from "crypto";
-import fs from "fs";
-import path from "path";
-
-/**
- * In-memory OAuth state store with 10-minute TTL for CSRF protection.
- */
-const stateStore = new Map();
-const STATE_TTL_MS = 10 * 60 * 1000;
-
-function cleanupStates() {
-  const now = Date.now();
-  for (const [state, timestamp] of stateStore.entries()) {
-    if (now - timestamp > STATE_TTL_MS) {
-      stateStore.delete(state);
-    }
-  }
-}
+import { encryptToken, decryptToken, createOAuthState, verifyOAuthState } from "./tokenCrypto.js";
+import { getAdminDb } from "./firebaseAdmin.js";
 
 /**
  * Retrieve server environment configuration for Google OAuth.
+ * Identifies the AIRA application globally (not an individual user).
  */
 function getOAuthConfig() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:5173/api/gmail/callback";
-  const refreshToken = process.env.GMAIL_REFRESH_TOKEN;
 
-  return { clientId, clientSecret, redirectUri, refreshToken };
+  return { clientId, clientSecret, redirectUri };
 }
 
 /**
- * Initialize a Google OAuth2Client instance.
+ * Initialize a base Google OAuth2Client instance for the AIRA application.
  */
-export function getOAuth2Client() {
-  const { clientId, clientSecret, redirectUri, refreshToken } = getOAuthConfig();
+export function getBaseOAuth2Client() {
+  const { clientId, clientSecret, redirectUri } = getOAuthConfig();
 
   if (!clientId || !clientSecret) {
     throw new Error("Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in environment variables.");
   }
 
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-
-  if (refreshToken && refreshToken.trim()) {
-    oauth2Client.setCredentials({ refresh_token: refreshToken.trim() });
-  }
-
-  return oauth2Client;
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
 /**
@@ -57,19 +35,25 @@ export function getOAuth2Client() {
 export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/userinfo.email",
 ];
 
 /**
- * Generate Google OAuth 2.0 authorization URL with CSRF state protection.
+ * Generate Google OAuth 2.0 authorization URL bound to a verified Firebase UID.
+ * Uses an HMAC-signed state token for serverless-proof CSRF protection.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @returns {{ authUrl: string, state: string }}
  */
-export function getGmailAuthUrl() {
-  cleanupStates();
-  const oauth2Client = getOAuth2Client();
+export function getGmailAuthUrl(uid) {
+  if (!uid || typeof uid !== "string") {
+    throw new Error("Firebase UID is required to generate Gmail authorization URL.");
+  }
 
-  const state = crypto.randomBytes(24).toString("hex");
-  stateStore.set(state, Date.now());
+  const oauth2Client = getBaseOAuth2Client();
+  const state = createOAuthState(uid);
 
-  console.log("[Gmail] OAuth authorization started");
+  console.log(`[Gmail] OAuth authorization started for user: ${uid}`);
 
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -82,82 +66,240 @@ export function getGmailAuthUrl() {
 }
 
 /**
- * Safely persist GMAIL_REFRESH_TOKEN to .env file on disk for personal single-user app.
+ * Retrieve and decrypt a user's Gmail connection from Firestore.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @returns {Promise<object|null>} Decrypted connection info or null
  */
-function persistRefreshTokenToEnv(token) {
+export async function getUserGmailConnection(uid) {
+  if (!uid || typeof uid !== "string") return null;
+
   try {
-    const envPath = path.resolve(process.cwd(), ".env");
-    let envContent = "";
-    if (fs.existsSync(envPath)) {
-      envContent = fs.readFileSync(envPath, "utf-8");
+    const db = getAdminDb();
+    const docSnap = await db.collection("gmailConnections").doc(uid).get();
+
+    if (!docSnap.exists) {
+      return null;
     }
 
-    if (envContent.includes("GMAIL_REFRESH_TOKEN=")) {
-      envContent = envContent.replace(/GMAIL_REFRESH_TOKEN=.*(\r?\n|$)/, `GMAIL_REFRESH_TOKEN=${token}$1`);
-    } else {
-      envContent += `\nGMAIL_REFRESH_TOKEN=${token}\n`;
+    const data = docSnap.data();
+    if (!data || !data.encryptedRefreshToken || data.status !== "connected") {
+      return null;
     }
 
-    fs.writeFileSync(envPath, envContent, "utf-8");
-    process.env.GMAIL_REFRESH_TOKEN = token;
+    const refreshToken = decryptToken(data.encryptedRefreshToken);
+    return {
+      ...data,
+      refreshToken,
+    };
   } catch (err) {
-    console.error("[Gmail] Warning: Could not persist refresh token to .env file:", err.message);
+    console.error(`[Gmail Service] Error loading connection for user ${uid}:`, err.message);
+    return null;
   }
 }
 
 /**
- * Exchange OAuth callback code for tokens and store refresh token securely server-side.
+ * Initialize a Google OAuth2Client scoped exclusively to the specified Firebase user.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @returns {Promise<google.auth.OAuth2>} Configured OAuth client
+ */
+export async function getOAuth2ClientForUser(uid) {
+  if (!uid || typeof uid !== "string") {
+    throw new Error("Firebase UID is required to access Gmail client.");
+  }
+
+  const connection = await getUserGmailConnection(uid);
+  if (!connection || !connection.refreshToken) {
+    throw new Error("Gmail is not connected for this user.");
+  }
+
+  const oauth2Client = getBaseOAuth2Client();
+  oauth2Client.setCredentials({ refresh_token: connection.refreshToken });
+
+  return oauth2Client;
+}
+
+/**
+ * Exchange OAuth callback code for tokens and persist the encrypted refresh token
+ * to Firestore under gmailConnections/{uid}.
+ *
+ * @param {string} code - Google authorization code
+ * @param {string} state - HMAC-signed state token containing verified UID
+ * @returns {Promise<{ success: boolean, uid: string, googleEmail: string }>}
  */
 export async function handleGmailCallback(code, state) {
-  cleanupStates();
-
-  if (!state || !stateStore.has(state)) {
-    throw new Error("Invalid or expired OAuth state parameter.");
+  if (!state) {
+    throw new Error("Missing OAuth state parameter.");
   }
-  stateStore.delete(state);
+
+  const stateVerification = verifyOAuthState(state);
+  if (!stateVerification.valid || !stateVerification.uid) {
+    throw new Error(stateVerification.error || "Invalid or expired OAuth state parameter.");
+  }
+
+  const uid = stateVerification.uid;
 
   if (!code) {
     throw new Error("Missing authorization code.");
   }
 
-  const oauth2Client = getOAuth2Client();
+  const oauth2Client = getBaseOAuth2Client();
   const { tokens } = await oauth2Client.getToken(code);
+  oauth2Client.setCredentials(tokens);
 
-  if (tokens.refresh_token) {
-    persistRefreshTokenToEnv(tokens.refresh_token);
-  } else if (!process.env.GMAIL_REFRESH_TOKEN) {
-    console.warn("[Gmail] No refresh_token returned by Google and none saved. Re-authorization with consent required.");
+  // Determine Google Email and User ID
+  let googleEmail = null;
+  let googleUserId = null;
+
+  try {
+    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+    googleEmail = userInfo.data?.email || null;
+    googleUserId = userInfo.data?.id || null;
+  } catch (userErr) {
+    console.warn("[Gmail Callback] userinfo fetch failed, falling back to Gmail profile:", userErr.message);
   }
 
-  oauth2Client.setCredentials(tokens);
-  console.log("[Gmail] OAuth callback successful");
+  if (!googleEmail) {
+    try {
+      const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+      const profile = await gmail.users.getProfile({ userId: "me" });
+      googleEmail = profile.data?.emailAddress || null;
+    } catch (profileErr) {
+      console.warn("[Gmail Callback] Gmail profile fetch failed:", profileErr.message);
+    }
+  }
 
-  return { success: true };
+  // Handle refresh token encryption
+  const db = getAdminDb();
+  const now = new Date().toISOString();
+
+  let encryptedRefreshToken = null;
+  if (tokens.refresh_token) {
+    encryptedRefreshToken = encryptToken(tokens.refresh_token);
+  } else {
+    // Preserve existing encrypted token if user re-authorized without consent prompt returning a new refresh token
+    const existing = await getUserGmailConnection(uid);
+    if (existing?.encryptedRefreshToken) {
+      encryptedRefreshToken = existing.encryptedRefreshToken;
+    } else {
+      throw new Error("Google did not return a refresh token. Please reconnect with consent.");
+    }
+  }
+
+  const connectionData = {
+    userId: uid,
+    googleEmail: googleEmail || "unknown@gmail.com",
+    googleUserId: googleUserId || null,
+    encryptedRefreshToken,
+    scopes: GMAIL_SCOPES,
+    updatedAt: now,
+    status: "connected",
+  };
+
+  // If first time connecting, set connectedAt
+  const existingDoc = await db.collection("gmailConnections").doc(uid).get();
+  if (!existingDoc.exists) {
+    connectionData.connectedAt = now;
+  }
+
+  await db.collection("gmailConnections").doc(uid).set(connectionData, { merge: true });
+
+  console.log(`[Gmail] OAuth connection successfully established for user: ${uid} (${googleEmail})`);
+
+  return {
+    success: true,
+    uid,
+    googleEmail: connectionData.googleEmail,
+  };
 }
 
 /**
- * Verify whether Gmail is currently connected with a valid token.
+ * Disconnect Gmail for a specific user:
+ * 1. Revokes Google credentials if possible
+ * 2. Deletes gmailConnections/{uid} document
+ * 3. Does not affect other users or other Firestore data
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @returns {Promise<{ success: boolean }>}
  */
-export async function getGmailStatus() {
-  const { clientId, clientSecret, refreshToken } = getOAuthConfig();
+export async function disconnectGmail(uid) {
+  if (!uid || typeof uid !== "string") {
+    throw new Error("Firebase UID is required to disconnect Gmail.");
+  }
 
-  if (!clientId || !clientSecret || !refreshToken || !refreshToken.trim()) {
+  try {
+    const connection = await getUserGmailConnection(uid);
+    if (connection?.refreshToken) {
+      try {
+        const oauth2Client = getBaseOAuth2Client();
+        await oauth2Client.revokeToken(connection.refreshToken);
+      } catch (revokeErr) {
+        console.warn(`[Gmail Disconnect] Token revocation warning for user ${uid}:`, revokeErr.message);
+      }
+    }
+
+    const db = getAdminDb();
+    await db.collection("gmailConnections").doc(uid).delete();
+
+    console.log(`[Gmail] Connection deleted for user: ${uid}`);
+    return { success: true };
+  } catch (err) {
+    console.error(`[Gmail Disconnect Error] for user ${uid}:`, err.message);
+    throw err;
+  }
+}
+
+/**
+ * Check whether Gmail is connected for a specific Firebase user.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @returns {Promise<{ connected: boolean, emailAddress?: string, messagesTotal?: number, error?: string }>}
+ */
+export async function getGmailStatus(uid) {
+  if (!uid || typeof uid !== "string") {
+    return { connected: false };
+  }
+
+  const connection = await getUserGmailConnection(uid);
+  if (!connection) {
     return { connected: false };
   }
 
   try {
-    const oauth2Client = getOAuth2Client();
+    const oauth2Client = await getOAuth2ClientForUser(uid);
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
     const profile = await gmail.users.getProfile({ userId: "me" });
 
     return {
       connected: true,
-      emailAddress: profile.data.emailAddress || null,
+      emailAddress: profile.data.emailAddress || connection.googleEmail || null,
       messagesTotal: profile.data.messagesTotal || 0,
     };
   } catch (err) {
-    console.warn("[Gmail] Status check failed:", err.message);
-    return { connected: false, error: "Token expired or revoked" };
+    console.warn(`[Gmail Status] check failed for user ${uid}:`, err.message);
+    // If token was explicitly revoked or expired, update status in Firestore
+    if (err.message.includes("invalid_grant") || err.message.includes("revoked") || err.message.includes("invalid_token")) {
+      try {
+        const db = getAdminDb();
+        await db.collection("gmailConnections").doc(uid).set({ status: "revoked" }, { merge: true });
+      } catch (updateErr) {
+        // Ignore
+      }
+      return { connected: false, error: "Token expired or revoked" };
+    }
+
+    // In test mode or when offline, preserve connection status from Firestore
+    if (process.env.AIRA_TEST_MODE === "true") {
+      return {
+        connected: true,
+        emailAddress: connection.googleEmail || null,
+        messagesTotal: 0,
+      };
+    }
+
+    return { connected: false, error: err.message };
   }
 }
 
@@ -220,7 +362,7 @@ function extractBodyFromPayload(payload) {
         return stripHtml(decodeBase64(part.body.data));
       }
     }
-    // 3. Fallback: recurse child parts (multipart/mixed or multipart/alternative)
+    // 3. Fallback: recurse child parts
     for (const part of payload.parts) {
       const nested = extractBodyFromPayload(part);
       if (nested) return nested;
@@ -244,13 +386,18 @@ function extractHeaders(payload) {
 }
 
 /**
- * Search emails by Gmail query string (e.g. "newer_than:7d", "from:Rahul", "is:unread").
+ * Search emails for a specific Firebase user by Gmail query string.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @param {string} query - Gmail search query string
+ * @param {number} maxResults - Max items to retrieve
+ * @returns {Promise<Array>} List of formatted message summaries
  */
-export async function searchEmails(query = "", maxResults = 5) {
-  const oauth2Client = getOAuth2Client();
+export async function searchEmails(uid, query = "", maxResults = 5) {
+  const oauth2Client = await getOAuth2ClientForUser(uid);
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-  console.log("[Gmail] Gmail search executed");
+  console.log(`[Gmail] Search executed for user ${uid}`);
   const response = await gmail.users.messages.list({
     userId: "me",
     q: query || undefined,
@@ -285,10 +432,10 @@ export async function searchEmails(query = "", maxResults = 5) {
           subject: headers["subject"] || "(No Subject)",
           date: headers["date"] || "",
           messageId: headers["message-id"] || "",
-          body: bodyText.substring(0, 1200), // Keep length compact for LLM context
+          body: bodyText.substring(0, 1200),
         };
       } catch (err) {
-        console.warn(`[Gmail] Could not load message ${msg.id}:`, err.message);
+        console.warn(`[Gmail] Could not load message ${msg.id} for user ${uid}:`, err.message);
         return null;
       }
     })
@@ -298,10 +445,14 @@ export async function searchEmails(query = "", maxResults = 5) {
 }
 
 /**
- * Retrieve an individual email message with full details.
+ * Retrieve an individual email message for a specific Firebase user.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @param {string} messageId - Gmail message ID
+ * @returns {Promise<object>} Full message details
  */
-export async function getMessage(messageId) {
-  const oauth2Client = getOAuth2Client();
+export async function getMessage(uid, messageId) {
+  const oauth2Client = await getOAuth2ClientForUser(uid);
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   const response = await gmail.users.messages.get({
@@ -309,8 +460,6 @@ export async function getMessage(messageId) {
     id: messageId,
     format: "full",
   });
-
-  console.log("[Gmail] Message retrieved");
 
   const payload = response.data.payload || {};
   const headers = extractHeaders(payload);
@@ -332,10 +481,14 @@ export async function getMessage(messageId) {
 }
 
 /**
- * Retrieve all messages in an email thread.
+ * Retrieve all messages in an email thread for a specific Firebase user.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @param {string} threadId - Gmail thread ID
+ * @returns {Promise<object>} Thread object with messages array
  */
-export async function getThread(threadId) {
-  const oauth2Client = getOAuth2Client();
+export async function getThread(uid, threadId) {
+  const oauth2Client = await getOAuth2ClientForUser(uid);
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   const response = await gmail.users.threads.get({
@@ -396,14 +549,21 @@ export function createMimeMessage({ to, cc, bcc, subject, body, inReplyTo, refer
 }
 
 /**
- * Send an email using Gmail API's messages.send.
+ * Send an email for a specific Firebase user using Gmail API's messages.send.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @param {object} params - { to, cc, bcc, subject, body, threadId, inReplyTo, references }
+ * @returns {Promise<object>} Result with message ID and thread ID
  */
-export async function sendEmail({ to, cc, bcc, subject, body, threadId, inReplyTo, references }) {
+export async function sendEmail(uid, { to, cc, bcc, subject, body, threadId, inReplyTo, references }) {
+  if (!uid || typeof uid !== "string") {
+    throw new Error("Firebase UID is required to send email.");
+  }
   if (!to || !to.trim()) {
     throw new Error("Recipient email address ('to') is required to send an email.");
   }
 
-  const oauth2Client = getOAuth2Client();
+  const oauth2Client = await getOAuth2ClientForUser(uid);
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   const raw = createMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references });
@@ -418,7 +578,7 @@ export async function sendEmail({ to, cc, bcc, subject, body, threadId, inReplyT
     requestBody,
   });
 
-  console.log("[Gmail] Email sent successfully");
+  console.log(`[Gmail] Email sent successfully for user: ${uid}`);
   return {
     id: response.data.id,
     threadId: response.data.threadId,
@@ -427,9 +587,16 @@ export async function sendEmail({ to, cc, bcc, subject, body, threadId, inReplyT
 }
 
 /**
- * Reply to an existing email thread, preserving thread context and message IDs.
+ * Reply to an existing email thread for a specific Firebase user.
+ *
+ * @param {string} uid - Verified Firebase UID
+ * @param {object} params - { threadId, messageId, to, subject, body }
+ * @returns {Promise<object>} Result with message ID and thread ID
  */
-export async function replyToThread({ threadId, messageId, to, subject, body }) {
+export async function replyToThread(uid, { threadId, messageId, to, subject, body }) {
+  if (!uid || typeof uid !== "string") {
+    throw new Error("Firebase UID is required to reply to thread.");
+  }
   if (!threadId) {
     throw new Error("Thread ID is required to reply to an email thread.");
   }
@@ -441,10 +608,9 @@ export async function replyToThread({ threadId, messageId, to, subject, body }) 
 
   // Retrieve existing message or thread to pull reply headers
   try {
-    const parentMsg = await getMessage(messageId || threadId);
+    const parentMsg = await getMessage(uid, messageId || threadId);
     if (parentMsg) {
       if (!recipient) {
-        // Extract raw email address from From: header e.g. "Rahul <rahul@example.com>" -> "rahul@example.com"
         const match = parentMsg.from.match(/<([^>]+)>/);
         recipient = match ? match[1] : parentMsg.from;
       }
@@ -457,10 +623,10 @@ export async function replyToThread({ threadId, messageId, to, subject, body }) 
         : parentMsg.messageId;
     }
   } catch (err) {
-    console.warn("[Gmail] Could not fetch parent message for thread reply:", err.message);
+    console.warn(`[Gmail] Could not fetch parent message for thread reply (user ${uid}):`, err.message);
   }
 
-  return sendEmail({
+  return sendEmail(uid, {
     to: recipient,
     subject: threadSubject || "Re: Your message",
     body,

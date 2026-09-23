@@ -3,6 +3,8 @@ import { handleGmailCallback } from "../gmailService.js";
 /**
  * GET /api/gmail/callback
  * Handles Google's OAuth 2.0 authorization code response.
+ * Cryptographically verifies the state token, extracts the authenticated Firebase UID,
+ * encrypts the refresh token, and binds the connection to that user's Firestore document.
  */
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -22,14 +24,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    await handleGmailCallback(code, state);
+    const result = await handleGmailCallback(code, state);
+    console.log(`[Gmail Callback] Successfully linked Gmail to Firebase user: ${result.uid}`);
     // Redirect back to AIRA app with success indicator
     return res.redirect("/?gmail=connected");
   } catch (err) {
     console.error("[Gmail Callback Error]:", err.message);
-    if (err.message.includes("state")) {
-      return res.status(400).json({ error: "Invalid or expired OAuth state parameter." });
+    if (err.message.includes("state") || err.message.includes("CSRF")) {
+      return res.status(400).json({
+        error: "OAuth state verification failed. Possible expired or cross-site request.",
+        details: err.message,
+      });
     }
-    return res.redirect(`/?gmail=error&reason=${encodeURIComponent("token_exchange_failed")}`);
+    return res.redirect(`/?gmail=error&reason=${encodeURIComponent(err.message || "token_exchange_failed")}`);
   }
 }

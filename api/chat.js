@@ -3,6 +3,7 @@ import { getCategoryProfileMemory } from "./userProfile.js";
 import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
 import { getGmailStatus, searchEmails, sendEmail, replyToThread } from "./gmailService.js";
 import { isEmailRelated, detectEmailIntent, extractGmailSearchQuery, findRecentEmailDraft, isValidEmailAddress } from "./emailHelper.js";
+import { verifyUserToken } from "./firebaseAdmin.js";
 
 /**
  * Stop words to exclude during token extraction
@@ -121,6 +122,10 @@ export default async function handler(req, res) {
   try {
     const { messageHistory, userName, memory } = req.body;
 
+    // Verify Firebase identity server-side (never trust arbitrary client-supplied body UID)
+    const authResult = await verifyUserToken(req);
+    const verifiedUid = authResult.authenticated && authResult.user?.uid ? authResult.user.uid : null;
+
     const latestUserTurn = (messageHistory || [])
       .filter((m) => m.role === "user")
       .slice(-1)[0]?.content || "";
@@ -128,12 +133,21 @@ export default async function handler(req, res) {
     // 0. Email / Gmail Intent Handling
     let emailContextBlock = "";
     if (isEmailRelated(latestUserTurn)) {
+      if (!verifiedUid) {
+        return res.status(200).json({
+          reply: "Please sign in to your AIRA account and connect your Gmail so I can check, summarize, draft, or send your emails.",
+          intent: "chat",
+          scenario: "normal",
+          emailDraft: null
+        });
+      }
+
       const emailIntent = detectEmailIntent(latestUserTurn);
-      const gmailStatus = await getGmailStatus();
+      const gmailStatus = await getGmailStatus(verifiedUid);
 
       if (!gmailStatus.connected) {
         return res.status(200).json({
-          reply: "Your Gmail account isn't connected yet. Please connect your Gmail account from your profile menu (or by opening /api/gmail/auth) so I can access, summarize, draft, or send your emails.",
+          reply: "Your Gmail account isn't connected yet. Please connect your Gmail account from your profile menu so I can access, summarize, draft, or send your emails.",
           intent: "chat",
           scenario: "normal",
           emailDraft: null
@@ -165,14 +179,14 @@ export default async function handler(req, res) {
 
         try {
           if (activeDraft.threadId) {
-            await replyToThread({
+            await replyToThread(verifiedUid, {
               threadId: activeDraft.threadId,
               to: recipient,
               subject: activeDraft.subject,
               body: activeDraft.body
             });
           } else {
-            await sendEmail({
+            await sendEmail(verifiedUid, {
               to: recipient,
               subject: activeDraft.subject,
               body: activeDraft.body
@@ -186,7 +200,7 @@ export default async function handler(req, res) {
             emailDraft: null
           });
         } catch (sendErr) {
-          console.error("[Gmail Send Error]:", sendErr.message);
+          console.error(`[Gmail Send Error] user ${verifiedUid}:`, sendErr.message);
           return res.status(200).json({
             reply: `I ran into an issue sending your email: ${sendErr.message}. Your draft is saved below if you want to retry.`,
             intent: "chat",
@@ -200,7 +214,7 @@ export default async function handler(req, res) {
       if (emailIntent === "SEARCH_READ") {
         try {
           const query = extractGmailSearchQuery(latestUserTurn);
-          const messages = await searchEmails(query, 3);
+          const messages = await searchEmails(verifiedUid, query, 3);
 
           if (messages.length === 0) {
             emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===\nQuery: "${query}"\nNo matching emails found.\nInstruction: Tell the user conversationally that you checked their Gmail and found no matching emails for that query.`;
@@ -230,7 +244,7 @@ CRITICAL INSTRUCTIONS FOR GMAIL CONTEXT:
 - Do NOT output an emailDraft unless explicitly asked to draft or compose a reply.`;
           }
         } catch (searchErr) {
-          console.warn("[Gmail Search Error]:", searchErr.message);
+          console.warn(`[Gmail Search Error] user ${verifiedUid}:`, searchErr.message);
           emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===\nCould not query Gmail: ${searchErr.message}.\nInstruction: Inform the user that there was a temporary issue checking their emails.`;
         }
       }

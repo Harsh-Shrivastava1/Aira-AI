@@ -153,8 +153,11 @@ export default function Agent({ user }) {
   const profileRef = useRef(null);
 
   const checkGmailStatus = useCallback(async () => {
+    if (!user) return;
     try {
-      const resp = await fetch(`${API_BASE}/api/gmail/status`);
+      const idToken = await user.getIdToken?.().catch(() => null);
+      const headers = idToken ? { Authorization: `Bearer ${idToken}` } : {};
+      const resp = await fetch(`${API_BASE}/api/gmail/status`, { headers });
       if (resp.ok) {
         const data = await resp.json();
         setGmailStatus(data);
@@ -162,7 +165,7 @@ export default function Agent({ user }) {
     } catch (err) {
       console.warn("[Gmail] Status check error:", err.message);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     checkGmailStatus();
@@ -295,6 +298,47 @@ export default function Agent({ user }) {
       addMessage("aira", msg);
     }
   }, [checkGmailStatus, addMessage, voice]);
+
+  const handleConnectGmail = useCallback(async () => {
+    try {
+      const idToken = await user?.getIdToken?.().catch(() => null);
+      if (!idToken) {
+        window.location.href = `${API_BASE}/api/gmail/auth`;
+        return;
+      }
+      const resp = await fetch(`${API_BASE}/api/gmail/auth?redirect=false`, {
+        headers: { Authorization: `Bearer ${idToken}`, Accept: "application/json" },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.authUrl) {
+          window.location.href = data.authUrl;
+          return;
+        }
+      }
+      window.location.href = `${API_BASE}/api/gmail/auth?token=${encodeURIComponent(idToken)}`;
+    } catch (err) {
+      console.warn("[Gmail Connect Error]:", err);
+      window.location.href = `${API_BASE}/api/gmail/auth`;
+    }
+  }, [user]);
+
+  const handleDisconnectGmail = useCallback(async () => {
+    try {
+      const idToken = await user?.getIdToken?.().catch(() => null);
+      const headers = idToken ? { Authorization: `Bearer ${idToken}` } : {};
+      const resp = await fetch(`${API_BASE}/api/gmail/disconnect`, {
+        method: "POST",
+        headers,
+      });
+      if (resp.ok) {
+        setGmailStatus({ connected: false });
+        addMessage("aira", "Your Gmail account has been disconnected.");
+      }
+    } catch (err) {
+      console.warn("[Gmail Disconnect Error]:", err);
+    }
+  }, [user, addMessage]);
 
   const handleEvaluate = useCallback(async (scenario) => {
     if (hasShownScoreRef.current) return null;
@@ -1517,48 +1561,75 @@ export default function Agent({ user }) {
               </button>
 
               {/* Gmail Connection Option */}
-              <button
-                onClick={() => {
-                  setShowUserMenu(false);
-                  if (!gmailStatus?.connected) {
-                    window.location.href = `${API_BASE}/api/gmail/auth`;
-                  }
-                }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "10px 12px", borderRadius: 8,
-                  fontSize: "0.85rem", fontWeight: 500,
-                  color: gmailStatus?.connected ? "#10b981" : "#4b5563",
-                  background: "transparent", border: "none",
-                  cursor: gmailStatus?.connected ? "default" : "pointer",
-                  transition: "all 0.2s ease",
-                  textAlign: "left",
-                }}
-                onMouseEnter={(e) => {
-                  if (!gmailStatus?.connected) {
+              {gmailStatus?.connected ? (
+                <div
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "8px 12px", borderRadius: 8,
+                    background: "rgba(16, 185, 129, 0.05)",
+                    border: "1px solid rgba(16, 185, 129, 0.15)",
+                    marginBottom: 2,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0, overflow: "hidden" }}>
+                    <Mail size={15} color="#10b981" style={{ flexShrink: 0 }} />
+                    <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                      <span style={{ fontSize: "0.80rem", color: "#10b981", fontWeight: 600 }}>Gmail Connected</span>
+                      {gmailStatus?.emailAddress && (
+                        <span style={{ fontSize: "0.62rem", color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {gmailStatus.emailAddress}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowUserMenu(false);
+                      handleDisconnectGmail();
+                    }}
+                    title="Disconnect Gmail"
+                    style={{
+                      fontSize: "0.68rem", color: "#ef4444", background: "rgba(239,68,68,0.08)",
+                      border: "1px solid rgba(239,68,68,0.2)", borderRadius: 6,
+                      padding: "3px 8px", cursor: "pointer", marginLeft: 8, flexShrink: 0,
+                      fontWeight: 600,
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(239,68,68,0.18)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "rgba(239,68,68,0.08)"}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    handleConnectGmail();
+                  }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "10px 12px", borderRadius: 8,
+                    fontSize: "0.85rem", fontWeight: 500,
+                    color: "#4b5563",
+                    background: "transparent", border: "none",
+                    cursor: "pointer",
+                    transition: "all 0.2s ease",
+                    textAlign: "left", width: "100%",
+                  }}
+                  onMouseEnter={(e) => {
                     e.currentTarget.style.background = "#f3f6ff";
                     e.currentTarget.style.color = "#3b82f6";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!gmailStatus?.connected) {
+                  }}
+                  onMouseLeave={(e) => {
                     e.currentTarget.style.background = "transparent";
                     e.currentTarget.style.color = "#4b5563";
-                  }
-                }}
-              >
-                <Mail size={15} color={gmailStatus?.connected ? "#10b981" : "#6b7280"} />
-                <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                  <span style={{ fontSize: "0.82rem" }}>
-                    {gmailStatus?.connected ? "Gmail Connected" : "Connect Gmail"}
-                  </span>
-                  {gmailStatus?.connected && gmailStatus?.emailAddress && (
-                    <span style={{ fontSize: "0.62rem", color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {gmailStatus.emailAddress}
-                    </span>
-                  )}
-                </div>
-              </button>
+                  }}
+                >
+                  <Mail size={15} color="#6b7280" />
+                  <span style={{ fontSize: "0.82rem" }}>Connect Gmail</span>
+                </button>
+              )}
 
               <button
                 onClick={() => auth.signOut()}
