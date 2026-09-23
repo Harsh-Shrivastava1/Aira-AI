@@ -1,5 +1,8 @@
 {
   "rewrites": [
+    { "source": "/api/history", "destination": "/api/userProfile?action=history" },
+    { "source": "/api/memory", "destination": "/api/userProfile?action=memory" },
+    { "source": "/api/file", "destination": "/api/file-chat" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

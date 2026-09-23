@@ -1,5 +1,5 @@
-import { createGroqChatCompletion } from "./groqClient.js";
-import { enforceRateLimit, RATE_LIMIT_POLICIES, isOperationDuplicate, getUserIdentifier, getClientIp } from "./rateLimiter.js";
+import { createGroqChatCompletion } from "./_lib/groqClient.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES, isOperationDuplicate, getUserIdentifier, getClientIp } from "./_lib/rateLimiter.js";
 
 /**
  * Programmatic redaction filter to guarantee no API keys, tokens, or credentials

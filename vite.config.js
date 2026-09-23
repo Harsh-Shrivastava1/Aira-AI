@@ -22,7 +22,26 @@ function localApiPlugin(env) {
 
         if (pathname.startsWith('/api/')) {
           const route = pathname.replace(/^\/api\//, '').replace(/\/$/, '');
-          const filePath = path.resolve(__dirname, 'api', `${route}.js`);
+          let filePath = path.resolve(__dirname, 'api', `${route}.js`);
+          let queryAction = null;
+
+          if (!fs.existsSync(filePath)) {
+            // Check dynamic routes e.g. api/gmail/[action].js
+            const parts = route.split('/');
+            if (parts.length === 2) {
+              const [folder, action] = parts;
+              const dynamicPath = path.resolve(__dirname, 'api', folder, '[action].js');
+              if (fs.existsSync(dynamicPath)) {
+                filePath = dynamicPath;
+                queryAction = action;
+              }
+            } else if (route === 'history' || route === 'memory') {
+              filePath = path.resolve(__dirname, 'api', 'userProfile.js');
+              queryAction = route;
+            } else if (route === 'file') {
+              filePath = path.resolve(__dirname, 'api', 'file-chat.js');
+            }
+          }
 
           if (fs.existsSync(filePath)) {
             try {
@@ -53,6 +72,9 @@ function localApiPlugin(env) {
 
               // Query params
               req.query = Object.fromEntries(urlObj.searchParams.entries());
+              if (queryAction) {
+                req.query.action = queryAction;
+              }
 
               // Vercel / Express response helper methods
               res.status = (code) => {

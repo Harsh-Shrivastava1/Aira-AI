@@ -1,5 +1,5 @@
-import { createGroqChatCompletion } from "./groqClient.js";
-import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
+import { createGroqChatCompletion } from "./_lib/groqClient.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./_lib/rateLimiter.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {

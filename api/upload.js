@@ -1,5 +1,5 @@
-import { createGroqChatCompletion } from "./groqClient.js";
-import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
+import { createGroqChatCompletion } from "./_lib/groqClient.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./_lib/rateLimiter.js";
 import Busboy from "busboy";
 import { createRequire } from "module";
 

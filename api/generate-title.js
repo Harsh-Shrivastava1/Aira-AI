@@ -1,4 +1,4 @@
-import { createGroqChatCompletion } from "./groqClient.js";
+import { createGroqChatCompletion } from "./_lib/groqClient.js";
 
 /**
  * Fast deterministic title extractor for common conversational intents

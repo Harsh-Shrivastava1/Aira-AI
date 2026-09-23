@@ -1,9 +1,9 @@
-import { createGroqChatCompletion } from "./groqClient.js";
-import { getCategoryProfileMemory } from "./userProfile.js";
-import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
-import { getGmailStatus, searchEmails, sendEmail, replyToThread } from "./gmailService.js";
-import { isEmailRelated, detectEmailIntent, extractGmailSearchQuery, findRecentEmailDraft, isValidEmailAddress } from "./emailHelper.js";
-import { verifyUserToken } from "./firebaseAdmin.js";
+import { createGroqChatCompletion } from "./_lib/groqClient.js";
+import { getCategoryProfileMemory } from "./_lib/userProfile.js";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./_lib/rateLimiter.js";
+import { getGmailStatus, searchEmails, sendEmail, replyToThread } from "./_lib/gmailService.js";
+import { isEmailRelated, detectEmailIntent, extractGmailSearchQuery, findRecentEmailDraft, isValidEmailAddress } from "./_lib/emailHelper.js";
+import { verifyUserToken } from "./_lib/firebaseAdmin.js";
 
 /**
  * Stop words to exclude during token extraction
