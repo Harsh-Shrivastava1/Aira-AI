@@ -5,6 +5,7 @@ import {
   chunkSpeechText,
   classifyMicrophoneInput,
   checkMicrophoneHealth,
+  isEchoTranscript,
 } from "../services/voiceService.js";
 
 /**
@@ -13,7 +14,7 @@ import {
  * Provides:
  * - Authoritative SpeechRecognition lifecycle manager with mutex lock and watchdog
  * - Full Web Speech API event handling (onstart, onaudiostart, onspeechstart, onresult, onspeechend, onsoundend, onaudioend, onerror, onend)
- * - Multi-layer acoustic echo suppression to prevent AIRA from self-triggering on her own speaker output
+ * - Multi-layer acoustic echo suppression with trailing post-TTS immunity window
  * - Instant, sensitive mid-speech user voice interruption and command matching
  * - Exponential backoff retry for network/temporary recognition drops
  * - Pre-flight microphone permission and health validation
@@ -38,6 +39,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
   const intentionalStopRef = useRef(false);
   const restartAttemptsRef = useRef(0);
   const restartTimerRef = useRef(null);
+  const lastBackoffDelayRef = useRef(0);
   const watchdogTimerRef = useRef(null);
   const lastAudioEventTimeRef = useRef(Date.now());
   const isSpeechUnlocked = useRef(false);
@@ -46,9 +48,12 @@ export function useVoice(onUserSpeak, onInterrupt) {
   // Active Speech & Echo Tracking
   const currentSpeechSessionId = useRef(0);
   const activeSpeechChunkRef = useRef("");
+  const recentSpokenChunksRef = useRef([]);
   const chunkStartTimeRef = useRef(0);
   const lastSpokenTextRef = useRef("");
   const isSpeakingRef = useRef(false);
+  const ttsFinishedTimestampRef = useRef(0);
+  const clearMicBufferRef = useRef(null);
 
   // Callback refs to avoid stale closures
   const onUserSpeakRef = useRef(onUserSpeak);
@@ -100,6 +105,9 @@ export function useVoice(onUserSpeak, onInterrupt) {
     currentSpeechSessionId.current += 1; // Invalidate active speech chunk queue
     activeSpeechChunkRef.current = "";
     isSpeakingRef.current = false;
+    if (clearMicBufferRef.current) {
+      clearMicBufferRef.current();
+    }
     if (synthRef.current) {
       try {
         synthRef.current.cancel();
@@ -125,10 +133,8 @@ export function useVoice(onUserSpeak, onInterrupt) {
       isStartingRef.current = false;
       if (err.name === "InvalidStateError") {
         // Recognition engine is transitioning or already active in browser.
-        // Never fabricate state; defer to onstart/onend for real confirmation and schedule retry if needed.
-        if (shouldBeListeningRef.current && !pausedByUserRef.current && !restartTimerRef.current) {
-          if (scheduleRestartRef.current) scheduleRestartRef.current(150);
-        }
+        // Synchronize internal refs to avoid repeated/infinite start() loops.
+        isRecognitionRunningRef.current = true;
       } else {
         console.warn("[AIRA Voice] recognition.start error:", err);
       }
@@ -160,10 +166,17 @@ export function useVoice(onUserSpeak, onInterrupt) {
       return;
     }
 
-    const backoff = delayMs > 0 ? delayMs : Math.min(100 * Math.pow(1.8, restartAttemptsRef.current), 3000);
+    const backoff = delayMs > 0 
+      ? delayMs 
+      : (lastBackoffDelayRef.current > 0 
+          ? lastBackoffDelayRef.current 
+          : Math.min(100 * Math.pow(1.8, restartAttemptsRef.current), 3000));
+    
+    lastBackoffDelayRef.current = 0; // reset once scheduled
 
     restartTimerRef.current = setTimeout(() => {
-      if (shouldBeListeningRef.current && !pausedByUserRef.current && !isRecognitionRunningRef.current) {
+      restartTimerRef.current = null;
+      if (shouldBeListeningRef.current && !pausedByUserRef.current && !isRecognitionRunningRef.current && !isStartingRef.current) {
         if (startRecognitionRef.current) startRecognitionRef.current();
       }
     }, backoff);
@@ -194,6 +207,14 @@ export function useVoice(onUserSpeak, onInterrupt) {
     let accumulatedTranscript = "";
     let interimDebounceTimer = null;
 
+    clearMicBufferRef.current = () => {
+      if (interimDebounceTimer) {
+        clearTimeout(interimDebounceTimer);
+        interimDebounceTimer = null;
+      }
+      accumulatedTranscript = "";
+    };
+
     const finalizeTranscript = (transcriptText) => {
       clearTimeout(interimDebounceTimer);
       const cleaned = transcriptText.trim();
@@ -202,11 +223,15 @@ export function useVoice(onUserSpeak, onInterrupt) {
       if (!cleaned) return;
 
       const now = Date.now();
+      const normCleaned = cleaned.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ");
+      const normLast = (lastSubmittedVoiceTranscriptRef.current?.text || "").toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ");
+
       if (
-        lastSubmittedVoiceTranscriptRef.current &&
-        cleaned.toLowerCase() === lastSubmittedVoiceTranscriptRef.current.text.toLowerCase() &&
-        now - lastSubmittedVoiceTranscriptRef.current.timestamp < 1200
+        normCleaned &&
+        normCleaned === normLast &&
+        now - lastSubmittedVoiceTranscriptRef.current.timestamp < (VOICE_CONFIG.delays.duplicateTurnWindowMs || 1500)
       ) {
+        console.log("[AIRA Voice] Suppressed duplicate voice transcript:", cleaned);
         return;
       }
       lastSubmittedVoiceTranscriptRef.current = { text: cleaned, timestamp: now };
@@ -337,13 +362,18 @@ export function useVoice(onUserSpeak, onInterrupt) {
       }
 
       const heardWords = (interimTranscript + " " + finalTranscript).trim();
+      if (!heardWords) return;
+
+      const isCurrentlySpeaking = isSpeakingRef.current || (synthRef.current && synthRef.current.speaking);
+      const isWithinTrailingEchoWindow = Date.now() - ttsFinishedTimestampRef.current < (VOICE_CONFIG.delays.trailingEchoImmunityMs || 1500);
 
       // Multi-Layer Acoustic Echo & Interruption Evaluation
-      if (isSpeakingRef.current || (synthRef.current && synthRef.current.speaking)) {
+      if (isCurrentlySpeaking) {
         const elapsed = Date.now() - chunkStartTimeRef.current;
         const classification = classifyMicrophoneInput({
           heardText: heardWords,
           activeSpokenChunk: activeSpeechChunkRef.current,
+          recentSpokenChunks: recentSpokenChunksRef.current,
           lastSpokenText: lastSpokenTextRef.current,
           isSpeaking: true,
           elapsedSinceChunkStartMs: elapsed,
@@ -359,6 +389,14 @@ export function useVoice(onUserSpeak, onInterrupt) {
           cancelActiveSpeech();
           if (onInterruptRef.current) onInterruptRef.current();
           setState("interrupted");
+          // Fall through so the genuine interruption is preserved, accumulated, and finalized!
+        }
+      } else if (isWithinTrailingEchoWindow && lastSpokenTextRef.current) {
+        // Trailing window: verify if heardWords is acoustic echo of recently spoken text
+        const isTrailingEcho = isEchoTranscript(heardWords, lastSpokenTextRef.current, recentSpokenChunksRef.current);
+        if (isTrailingEcho) {
+          console.log("[AIRA Voice] Suppressed trailing TTS acoustic echo:", heardWords);
+          return;
         }
       }
 
@@ -400,7 +438,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
       isStartingRef.current = false;
       const errType = e.error;
 
-      // Normal silence timeout in Chrome/Edge — let onend handle graceful loop
+      // Normal silence timeout in Chrome/Android — let onend handle graceful loop
       if (errType === "no-speech") {
         return;
       }
@@ -411,14 +449,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
 
       console.warn(`[AIRA Voice] Recognition error: ${errType}`);
 
-      if (errType === "not-allowed" || errType === "service-not-allowed") {
-        isRecognitionRunningRef.current = false;
-        shouldBeListeningRef.current = false;
-        setState("error");
-        return;
-      }
-
-      if (errType === "audio-capture") {
+      if (errType === "not-allowed" || errType === "service-not-allowed" || errType === "audio-capture") {
         isRecognitionRunningRef.current = false;
         shouldBeListeningRef.current = false;
         setState("error");
@@ -427,7 +458,9 @@ export function useVoice(onUserSpeak, onInterrupt) {
 
       if (errType === "network") {
         restartAttemptsRef.current += 1;
-        scheduleRestart(1000);
+        lastBackoffDelayRef.current = VOICE_CONFIG.delays.networkBackoffMs || 1000;
+        scheduleRestart(lastBackoffDelayRef.current);
+        return;
       }
     };
 
@@ -437,7 +470,13 @@ export function useVoice(onUserSpeak, onInterrupt) {
 
       // If recognition stopped unexpectedly while listening should be active -> recover
       if (shouldBeListeningRef.current && !pausedByUserRef.current && !intentionalStopRef.current) {
-        scheduleRestart(100);
+        // If AIRA is actively speaking, wait for speech synthesis completion to restart recognition cleanly
+        if (isSpeakingRef.current || (synthRef.current && synthRef.current.speaking)) {
+          return;
+        }
+
+        const delay = lastBackoffDelayRef.current > 0 ? lastBackoffDelayRef.current : 100;
+        scheduleRestart(delay);
       }
     };
 
@@ -461,6 +500,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
       shouldBeListeningRef.current = false;
       isRecognitionRunningRef.current = false;
       isStartingRef.current = false;
+      clearMicBufferRef.current = null;
       clearTimeout(interimDebounceTimer);
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (watchdogTimerRef.current) clearInterval(watchdogTimerRef.current);
@@ -535,8 +575,9 @@ export function useVoice(onUserSpeak, onInterrupt) {
       unlock();
       cancelActiveSpeech();
 
-      // Store in history for "repeat that" command
+      // Store in history for echo matching & "repeat that" command
       lastSpokenTextRef.current = text;
+      recentSpokenChunksRef.current = [];
 
       // Split text into natural sentence chunks
       const chunks = chunkSpeechText(text);
@@ -552,9 +593,29 @@ export function useVoice(onUserSpeak, onInterrupt) {
       let currentChunkIndex = 0;
 
       // Keep recognition running so user can interrupt via voice
-      if (shouldBeListeningRef.current && !isRecognitionRunningRef.current) {
+      if (shouldBeListeningRef.current && !isRecognitionRunningRef.current && !isStartingRef.current) {
         startRecognition();
       }
+
+      const finalizeTtsCompletion = () => {
+        if (sessionId !== currentSpeechSessionId.current) return;
+        ttsFinishedTimestampRef.current = Date.now();
+        isSpeakingRef.current = false;
+        activeSpeechChunkRef.current = "";
+
+        // Clear accumulated microphone buffer captured while AIRA spoke
+        if (clearMicBufferRef.current) {
+          clearMicBufferRef.current();
+        }
+
+        setState("idle");
+        if (onEnd) onEnd();
+
+        // Auto-resume listening cleanly via scheduleRestart
+        if (!pausedByUserRef.current && shouldBeListeningRef.current) {
+          scheduleRestart(VOICE_CONFIG.delays.postSpeakListenDelayMs);
+        }
+      };
 
       const playNextChunk = () => {
         // If user interrupted or another speech session started, stop immediately
@@ -564,18 +625,20 @@ export function useVoice(onUserSpeak, onInterrupt) {
         }
 
         if (currentChunkIndex >= chunks.length) {
-          isSpeakingRef.current = false;
-          activeSpeechChunkRef.current = "";
-          setState("idle");
-          if (onEnd) onEnd();
-
-          // Auto-resume listening if not manually paused by user
-          if (!pausedByUserRef.current && shouldBeListeningRef.current) {
-            setTimeout(() => {
-              if (sessionId === currentSpeechSessionId.current && !pausedByUserRef.current) {
-                startListening();
+          // Verify speech synthesis engine actually finished draining its audio buffer
+          if (synthRef.current && synthRef.current.speaking) {
+            const checkSpeakingDone = setInterval(() => {
+              if (!synthRef.current || !synthRef.current.speaking || sessionId !== currentSpeechSessionId.current) {
+                clearInterval(checkSpeakingDone);
+                finalizeTtsCompletion();
               }
-            }, VOICE_CONFIG.delays.postSpeakListenDelayMs);
+            }, 40);
+            setTimeout(() => {
+              clearInterval(checkSpeakingDone);
+              finalizeTtsCompletion();
+            }, 600);
+          } else {
+            finalizeTtsCompletion();
           }
           return;
         }
@@ -584,6 +647,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
         currentChunkIndex++;
 
         activeSpeechChunkRef.current = chunkText;
+        recentSpokenChunksRef.current = [...recentSpokenChunksRef.current.slice(-5), chunkText];
         chunkStartTimeRef.current = Date.now();
 
         const utterance = new SpeechSynthesisUtterance(chunkText);
@@ -633,7 +697,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
         }
       }, VOICE_CONFIG.delays.preSpeakMs);
     },
-    [unlock, cancelActiveSpeech, speakingRate, startListening, startRecognition]
+    [unlock, cancelActiveSpeech, speakingRate, startListening, startRecognition, scheduleRestart]
   );
 
   const setThinking = useCallback((message = "") => {

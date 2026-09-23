@@ -40,6 +40,9 @@ export const VOICE_CONFIG = {
     preSpeakMs: 0,           // Immediate speech start without artificial waiting
     postSpeakListenDelayMs: 200, // Small gap after speech ends before auto-opening mic
     recoveryBackoffMs: 600,  // Wait time before retrying a recoverable speech/network failure
+    networkBackoffMs: 1000,  // Backoff for network/service recognition errors
+    trailingEchoImmunityMs: 1500, // Trailing post-TTS echo suppression window
+    duplicateTurnWindowMs: 1500, // Idempotency turn deduplication window
   },
 
   // Voice synthesis chunking for long responses
@@ -100,8 +103,8 @@ export const VOICE_CONFIG = {
  * Standard voice commands recognized across conversation turns
  */
 export const VOICE_COMMANDS = {
-  STOP: ["stop", "shut up", "quiet", "be quiet", "silence", "stop talking", "hold on", "pause", "stop please"],
-  WAIT: ["wait", "hang on", "one second", "give me a second", "just a moment", "wait a moment", "wait a sec", "wait a second", "wait a minute", "give me a moment", "hold on a second", "hold on a moment"],
+  STOP: ["stop", "shut up", "quiet", "be quiet", "silence", "stop talking", "hold on", "pause", "stop please", "cancel"],
+  WAIT: ["wait", "hang on", "one second", "give me a second", "just a moment", "wait a moment", "wait a sec", "wait a second", "wait a minute", "give me a moment", "hold on a second", "hold on a moment", "no wait"],
   REPEAT: ["repeat that", "say that again", "repeat", "say again", "what did you say", "come again", "pardon"],
   SLOWER: ["slow down", "speak slower", "talk slower", "too fast", "speak slowly", "talk slowly"],
   FASTER: ["speak faster", "talk faster", "speed up", "too slow", "faster"],
@@ -109,6 +112,22 @@ export const VOICE_COMMANDS = {
   DEEPER: ["go deeper", "explain that", "tell me more", "elaborate", "give more detail"],
   STOP_INTERVIEW: ["stop the interview", "end the interview", "stop interview", "exit interview", "end interview"],
 };
+
+/**
+ * Key phrases that signal immediate user interruption even when part of a longer sentence
+ */
+export const INTERRUPTION_PHRASES = [
+  "stop",
+  "wait",
+  "hold on",
+  "hang on",
+  "actually",
+  "cancel",
+  "listen",
+  "no wait",
+  "change that",
+  "shut up",
+];
 
 const POLITE_PREFIXES = /^(?:please|can you|could you|would you|aira|hey aira|ok aira|okay aira)\s+/i;
 const POLITE_SUFFIXES = /\s+(?:please|aira|now|thanks|thank you)$/i;

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Clipboard, Check } from "lucide-react";
 import EmailCard from "./EmailCard";
 
-export default function TransientChatBox({ messages, onRefineEmail }) {
+export default function TransientChatBox({ messages, onRefineEmail, onSendEmail }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
@@ -145,9 +145,11 @@ export default function TransientChatBox({ messages, onRefineEmail }) {
               {!isUser && m.emailDraft && m.emailDraft.subject && m.emailDraft.body && m.emailDraft.subject !== "..." && (
                 <div style={{ marginTop: 14, width: "100%", paddingLeft: 16, paddingRight: 16 }}>
                   <EmailCard
+                    to={m.emailDraft.to}
                     subject={m.emailDraft.subject}
                     body={m.emailDraft.body}
                     onRefine={(req) => onRefineEmail && onRefineEmail(req)}
+                    onSend={(draft) => onSendEmail && onSendEmail(draft)}
                   />
                 </div>
               )}

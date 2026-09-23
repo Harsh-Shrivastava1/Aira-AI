@@ -1,6 +1,8 @@
 import { createGroqChatCompletion } from "./groqClient.js";
 import { getCategoryProfileMemory } from "./userProfile.js";
 import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rateLimiter.js";
+import { getGmailStatus, searchEmails, sendEmail, replyToThread } from "./gmailService.js";
+import { isEmailRelated, detectEmailIntent, extractGmailSearchQuery, findRecentEmailDraft, isValidEmailAddress } from "./emailHelper.js";
 
 /**
  * Stop words to exclude during token extraction
@@ -123,6 +125,117 @@ export default async function handler(req, res) {
       .filter((m) => m.role === "user")
       .slice(-1)[0]?.content || "";
 
+    // 0. Email / Gmail Intent Handling
+    let emailContextBlock = "";
+    if (isEmailRelated(latestUserTurn)) {
+      const emailIntent = detectEmailIntent(latestUserTurn);
+      const gmailStatus = await getGmailStatus();
+
+      if (!gmailStatus.connected) {
+        return res.status(200).json({
+          reply: "Your Gmail account isn't connected yet. Please connect your Gmail account from your profile menu (or by opening /api/gmail/auth) so I can access, summarize, draft, or send your emails.",
+          intent: "chat",
+          scenario: "normal",
+          emailDraft: null
+        });
+      }
+
+      // Branch 1: Explicit Send Protection & Execution
+      if (emailIntent === "SEND_EXPLICIT") {
+        const activeDraft = findRecentEmailDraft(messageHistory);
+
+        if (!activeDraft || !activeDraft.body) {
+          return res.status(200).json({
+            reply: "There's no email draft ready to send. Tell me what you'd like me to write and who to send it to, and I'll draft it for you first.",
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: null
+          });
+        }
+
+        const recipient = (activeDraft.to || "").trim();
+        if (!recipient || !isValidEmailAddress(recipient)) {
+          return res.status(200).json({
+            reply: `I have your draft ready ("${activeDraft.subject || "No Subject"}"), but I need a valid email address to send it to. Who should I send it to?`,
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: activeDraft
+          });
+        }
+
+        try {
+          if (activeDraft.threadId) {
+            await replyToThread({
+              threadId: activeDraft.threadId,
+              to: recipient,
+              subject: activeDraft.subject,
+              body: activeDraft.body
+            });
+          } else {
+            await sendEmail({
+              to: recipient,
+              subject: activeDraft.subject,
+              body: activeDraft.body
+            });
+          }
+
+          return res.status(200).json({
+            reply: `Sent. Your email to ${recipient} with subject "${activeDraft.subject || "No Subject"}" was sent successfully.`,
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: null
+          });
+        } catch (sendErr) {
+          console.error("[Gmail Send Error]:", sendErr.message);
+          return res.status(200).json({
+            reply: `I ran into an issue sending your email: ${sendErr.message}. Your draft is saved below if you want to retry.`,
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: activeDraft
+          });
+        }
+      }
+
+      // Branch 2: Search or Read Emails
+      if (emailIntent === "SEARCH_READ") {
+        try {
+          const query = extractGmailSearchQuery(latestUserTurn);
+          const messages = await searchEmails(query, 3);
+
+          if (messages.length === 0) {
+            emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===\nQuery: "${query}"\nNo matching emails found.\nInstruction: Tell the user conversationally that you checked their Gmail and found no matching emails for that query.`;
+          } else {
+            const formattedMessages = messages.map((m, idx) => `
+Message ${idx + 1}:
+- From: ${m.from}
+- To: ${m.to}
+- Subject: ${m.subject}
+- Date: ${m.date}
+- Thread ID: ${m.threadId}
+- Message ID: ${m.messageId}
+- Snippet: ${m.snippet}
+- Content: ${m.body || m.snippet}
+`).join("\n");
+
+            emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===
+Query: "${query}"
+Retrieved ${messages.length} email(s):
+${formattedMessages}
+==================================================
+CRITICAL INSTRUCTIONS FOR GMAIL CONTEXT:
+- Answer the user's specific question directly and concisely using the email details above.
+- Mention who sent the email, when, and the key points.
+- If asked to summarize, give a clean 2-3 sentence conversational summary suitable for voice.
+- Do NOT fabricate email contents not present in the search results.
+- Do NOT output an emailDraft unless explicitly asked to draft or compose a reply.`;
+          }
+        } catch (searchErr) {
+          console.warn("[Gmail Search Error]:", searchErr.message);
+          emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===\nCould not query Gmail: ${searchErr.message}.\nInstruction: Inform the user that there was a temporary issue checking their emails.`;
+        }
+      }
+    }
+
     // 1. Check categorized profile memory with conversation context for pronoun/elliptical resolution
     const profileMemoryItem = getCategoryProfileMemory(latestUserTurn, messageHistory);
 
@@ -130,8 +243,8 @@ export default async function handler(req, res) {
     const sessionMemory = retrieveRelevantMemories(memory, messageHistory);
 
     const relevantMemoryBlock = profileMemoryItem
-      ? `=== RELEVANT CONTEXT (SILENT BACKGROUND CONTEXT — NOT A SCRIPT) ===\n${profileMemoryItem.content}\n\n=== RELEVANT SESSION MEMORY ===\n${sessionMemory}`
-      : `=== RELEVANT SESSION MEMORY ===\n${sessionMemory}`;
+      ? `=== RELEVANT CONTEXT (SILENT BACKGROUND CONTEXT — NOT A SCRIPT) ===\n${profileMemoryItem.content}\n\n=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${emailContextBlock}`
+      : `=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${emailContextBlock}`;
 
     const systemPrompt = `You are AIRA — a voice-first AI assistant. You are intelligent, calm, warm, confident, socially aware, and direct. You feel like a real person having a natural, capable conversation with an engineering peer, not a scripted customer-support chatbot.
 
@@ -233,10 +346,13 @@ Always return valid JSON in exactly this structure:
   "reply": "Conversational, voice-ready response",
   "intent": "chat | start_session | end_session | evaluate",
   "scenario": "normal | interview | teaching | roleplay | problem_solving",
-  "emailDraft": { "subject": "...", "body": "..." } | null
+  "emailDraft": { "to": "...", "subject": "...", "body": "...", "threadId": "..." } | null
 }
 
-CRITICAL EMAIL RULE: ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, write, or compose an email. Otherwise set "emailDraft" to null.
+CRITICAL EMAIL RULES:
+1. ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, write, or compose an email/reply. Otherwise set "emailDraft" to null.
+2. DRAFTS ARE NEVER AUTOMATICALLY SENT. When generating an emailDraft, always explain conversationally that the draft is ready for their review and let them know they can say "Send it" when ready.
+3. If drafting a reply to a previous email from search results, populate "threadId" with the matching thread ID and set "to" to the sender's email address.
 
 ========================
 END
@@ -267,8 +383,10 @@ END
     if (content.emailDraft && content.emailDraft.subject && content.emailDraft.body) {
       const subject = content.emailDraft.subject.trim();
       const body = content.emailDraft.body.trim();
+      const to = content.emailDraft.to ? content.emailDraft.to.trim() : "";
+      const threadId = content.emailDraft.threadId ? content.emailDraft.threadId.trim() : null;
       if (subject !== "..." && body !== "..." && subject.length > 2 && body.length > 5) {
-        finalEmailDraft = { subject, body };
+        finalEmailDraft = { to, subject, body, threadId };
       }
     }
 

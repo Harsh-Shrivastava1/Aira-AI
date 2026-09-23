@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { LogOut, Cpu, BarChart2, MessageCircle, FileText, X, Trash2, Clipboard } from "lucide-react";
+import { LogOut, Cpu, BarChart2, MessageCircle, FileText, X, Trash2, Clipboard, Mail } from "lucide-react";
 import VoiceOrb from "../components/VoiceOrb";
 import TransientChatBox from "../components/TransientChatBox";
 import MinimalEvaluationOverlay from "../components/MinimalEvaluationOverlay";
@@ -149,7 +149,24 @@ export default function Agent({ user }) {
   const [pastedText, setPastedText] = useState("");
   const [history, setHistory] = useState([]);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [gmailStatus, setGmailStatus] = useState({ connected: false });
   const profileRef = useRef(null);
+
+  const checkGmailStatus = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/api/gmail/status`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setGmailStatus(data);
+      }
+    } catch (err) {
+      console.warn("[Gmail] Status check error:", err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkGmailStatus();
+  }, [checkGmailStatus]);
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -263,6 +280,22 @@ export default function Agent({ user }) {
     setMessages((prev) => [...prev, { id: Date.now() + Math.random(), role, text, emailDraft, type }]);
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gmailParam = params.get("gmail");
+    if (gmailParam === "connected") {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      checkGmailStatus();
+      const msg = "Gmail connected successfully! You can now ask me to check, summarize, draft, or send your emails.";
+      addMessage("aira", msg);
+      voice.speak(msg);
+    } else if (gmailParam === "denied" || gmailParam === "error") {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      const msg = "Gmail authorization could not be completed. You can try connecting again whenever you're ready.";
+      addMessage("aira", msg);
+    }
+  }, [checkGmailStatus, addMessage, voice]);
+
   const handleEvaluate = useCallback(async (scenario) => {
     if (hasShownScoreRef.current) return null;
     const log = messageHistoryRef.current.map((m) => m.role + ": " + m.content);
@@ -345,20 +378,23 @@ export default function Agent({ user }) {
       abortControllerRef.current = null;
     }
     activeRequestIdRef.current += 1;
-  }, []);
+    voice.cancelActiveSpeech();
+  }, [voice]);
 
   const handleUserSpeak = useCallback(async (transcript) => {
     if (!transcript || typeof transcript !== "string") return;
     const cleanTranscript = transcript.trim();
     if (!cleanTranscript) return;
 
-    // Idempotency turn guard: Ignore accidental duplicate transcript within 1200ms
+    // Idempotency turn guard: Ignore accidental duplicate transcript within 1500ms or while active turn is thinking/speaking
     const now = Date.now();
-    if (
-      lastSubmittedTurnRef.current &&
-      cleanTranscript.toLowerCase() === lastSubmittedTurnRef.current.text.toLowerCase() &&
-      now - lastSubmittedTurnRef.current.timestamp < 1200
-    ) {
+    const normClean = cleanTranscript.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ");
+    const normLast = (lastSubmittedTurnRef.current?.text || "").toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?]/g, "").replace(/\s+/g, " ");
+
+    const isDuplicateWithinWindow = normClean && normClean === normLast && (now - (lastSubmittedTurnRef.current?.timestamp || 0) < 1500);
+    const isDuplicateWhileBusy = normClean && normClean === normLast && (voice.state === "thinking" || voice.state === "speaking");
+
+    if (lastSubmittedTurnRef.current?.text && (isDuplicateWithinWindow || isDuplicateWhileBusy)) {
       console.log("[Agent] Suppressed rapid duplicate turn submission:", cleanTranscript);
       return;
     }
@@ -809,11 +845,13 @@ export default function Agent({ user }) {
       ════════════════════════════════════════ */}
       <header style={{
         flexShrink: 0,
-        height: isMobile ? 60 : HEADER_H,
+        height: isMobile ? "calc(56px + env(safe-area-inset-top, 0px))" : HEADER_H,
+        paddingTop: isMobile ? "env(safe-area-inset-top, 0px)" : 0,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: isMobile ? "0 16px" : "0 24px",
+        paddingLeft: isMobile ? "16px" : "24px",
+        paddingRight: isMobile ? "16px" : "24px",
         background: "rgba(255, 255, 255, 0.9)",
         backdropFilter: "blur(20px)",
         WebkitBackdropFilter: "blur(20px)",
@@ -822,12 +860,6 @@ export default function Agent({ user }) {
         zIndex: 100,
         transition: "all 0.25s ease",
       }}>
-        {/* Top accent stripe */}
-        <div style={{
-          position: "absolute", top: 0, left: 0, right: 0, height: 2,
-          background: "linear-gradient(to right, #6a8cff, #8ed0ff)",
-        }} />
-
         {/* Brand */}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{
@@ -896,45 +928,21 @@ export default function Agent({ user }) {
             )}
           </AnimatePresence>
 
-          {isMobile && (
+          {isMobile && evaluation && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 50 }}>
-              {evaluation && (
-                <button
-                  onClick={() => setShowEvalPanel((v) => !v)}
-                  style={{
-                    background: "rgba(16, 185, 129, 0.1)",
-                    border: "1px solid rgba(16, 185, 129, 0.2)",
-                    borderRadius: 8,
-                    width: 32, height: 32,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    cursor: "pointer", color: "#10b981",
-                  }}
-                >
-                  <BarChart2 size={14} />
-                </button>
-              )}
               <button
-                onClick={() => setShowPasteModal(true)}
-                title="Paste large text"
+                onClick={() => setShowEvalPanel((v) => !v)}
                 style={{
-                  background: "rgba(106,140,255,0.08)",
-                  border: "1px solid rgba(106,140,255,0.15)",
+                  background: "rgba(16, 185, 129, 0.1)",
+                  border: "1px solid rgba(16, 185, 129, 0.2)",
                   borderRadius: 8,
                   width: 32, height: 32,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: "pointer", color: "#6a8cff",
+                  cursor: "pointer", color: "#10b981",
                 }}
               >
-                <Clipboard size={14} />
+                <BarChart2 size={14} />
               </button>
-
-              <FileUpload
-                fileContext={null}
-                onFileAnalyzed={(result) => setFileContext(result)}
-                onClearFile={() => setFileContext(null)}
-                addMessage={addMessage}
-                voiceSpeak={(text) => voice.speak(text)}
-              />
             </div>
           )}
         </div>
@@ -977,45 +985,45 @@ export default function Agent({ user }) {
       </AnimatePresence>
 
       {/* ════════════════════════════════════════
-          BODY ROW — flex:1, overflow:hidden
-          Left orb (55%) + Right chat (45%)
+          BODY ROW — Orb-First composition
+          Desktop: Prominent center-stage VoiceOrb + Sleek frosted conversation dock
+          Mobile: Dominant centered VoiceOrb + Compact transcript card + One-handed quick action bar
       ════════════════════════════════════════ */}
       <main style={{
         flex: 1,
         display: "flex",
         flexDirection: isMobile ? "column" : "row",
-        overflow: "hidden",
+        overflowX: "hidden",
+        overflowY: "hidden",
         position: "relative",
         zIndex: 1,
-        maxWidth: isMobile ? 420 : "none",
+        maxWidth: isMobile ? "440px" : "none",
         margin: "0 auto",
         width: "100%",
+        padding: isMobile ? "0 16px" : "0 28px",
+        boxSizing: "border-box",
       }}>
 
-        {/* ── LEFT: ORB PANEL ── */}
+        {/* ── ORB PANEL: Dominant centerpiece ── */}
         <div 
           className="orb-panel"
           style={{
             display: "flex",
-            flex: isMobile ? "none" : "0 0 55%",
+            flexGrow: 1,
+            flexShrink: 1,
+            flexBasis: isMobile ? "auto" : "0%",
             height: isMobile ? "auto" : "100%",
+            minHeight: isMobile ? 320 : "none",
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
             position: "relative",
-            borderRight: isMobile ? "none" : "1px solid rgba(0,0,0,0.05)",
+            width: "100%",
           }}
         >
-          {/* Divider line */}
-          <div style={{
-            position: "absolute", right: 0, top: "20%", bottom: "20%",
-            width: 1, pointerEvents: "none",
-            background: "linear-gradient(to bottom, transparent, rgba(0,0,0,0.05), transparent)",
-          }} />
-
           {/*
-           * ORB WRAPPER — absolute centered for maximum stability.
-           * This ensures the orb never shifts even if re-renders occur.
+           * ORB WRAPPER — Centered with balanced spacing.
+           * VoiceOrb itself is untouched.
            */}
           <div 
             onClick={() => {
@@ -1023,13 +1031,12 @@ export default function Agent({ user }) {
             }}
             className="orb-container"
             style={{
-              position: isMobile ? "relative" : "absolute",
-              top: isMobile ? "auto" : "50%",
-              left: isMobile ? "auto" : "50%",
-              transform: isMobile ? "none" : "translate(-50%, -50%)",
-              margin: isMobile ? "20px 0 10px" : "0",
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               cursor: !hasStarted ? "pointer" : "default",
-              transition: "all 0.4s ease",
+              transition: "transform 0.3s ease",
             }}
           >
             <VoiceOrb
@@ -1043,53 +1050,62 @@ export default function Agent({ user }) {
           </div>
         </div>
 
-        {/* ── CHAT PANEL ── */}
-        <div 
-          className="chat-panel"
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            position: "relative",
-            background: isMobile ? "transparent" : "rgba(255,255,255,0.85)",
-            backdropFilter: isMobile ? "none" : "blur(20px)",
-            borderLeft: isMobile ? "none" : "1px solid rgba(0,0,0,0.08)",
-            width: "100%",
-          }}
-        >
+        {/* ── CONVERSATION PANEL: Visible on desktop only (hidden in phone view) ── */}
+        {!isMobile && (
+          <div 
+            className="chat-panel"
+            style={{
+              flexGrow: 0,
+              flexShrink: 0,
+              flexBasis: "390px",
+              maxWidth: "410px",
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              position: "relative",
+              background: "rgba(255, 255, 255, 0.70)",
+              backdropFilter: "blur(20px)",
+              WebkitBackdropFilter: "blur(20px)",
+              border: "1px solid rgba(255, 255, 255, 0.75)",
+              borderRadius: 24,
+              boxShadow: "0 8px 32px rgba(100, 140, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04)",
+              margin: "16px 0 20px",
+              height: "calc(100% - 36px)",
+              flexShrink: 0,
+            }}
+          >
 
-          {/* Eval panel slides from right — only opacity+x, position:absolute so it doesn't shift layout */}
-          <AnimatePresence>
-            {showEvalPanel && evaluation && (
-              <motion.div
-                key="eval"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.25 }}
-                style={{
-                  position: "absolute", top: 0, right: 0, bottom: 0,
-                  width: 290, zIndex: 20,
-                  borderLeft: "1px solid rgba(255,255,255,0.06)",
-                }}
-              >
-                <MinimalEvaluationOverlay evaluation={evaluation} onClose={() => setShowEvalPanel(false)} />
-              </motion.div>
-            )}
-          </AnimatePresence>
+            {/* Desktop eval panel slides from right */}
+            <AnimatePresence>
+              {showEvalPanel && evaluation && (
+                <motion.div
+                  key="eval-desktop"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.25 }}
+                  style={{
+                    position: "absolute", top: 0, right: 0, bottom: 0,
+                    width: 290, zIndex: 20,
+                    borderLeft: "1px solid rgba(255,255,255,0.06)",
+                  }}
+                >
+                  <MinimalEvaluationOverlay evaluation={evaluation} onClose={() => setShowEvalPanel(false)} />
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-          {/* Chat sub-header — hidden on mobile */}
-          {!isMobile && (
+            {/* Chat sub-header */}
             <div style={{
               flexShrink: 0,
               height: 46,
               display: "flex",
               alignItems: "center",
               gap: 8,
-              padding: "0 22px",
-              borderBottom: "1px solid rgba(0,0,0,0.08)",
-              background: "rgba(255,255,255,0.95)",
+              padding: "0 20px",
+              borderBottom: "1px solid rgba(0,0,0,0.06)",
+              background: "rgba(255,255,255,0.85)",
             }}>
               <div style={{
                 width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
@@ -1104,7 +1120,7 @@ export default function Agent({ user }) {
                 Conversation
               </span>
 
-              {/* File upload button — always at the far right */}
+              {/* Desktop tools on right of sub-header */}
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
                 <button
                   onClick={() => setShowPasteModal(true)}
@@ -1113,7 +1129,7 @@ export default function Agent({ user }) {
                     background: "rgba(106,140,255,0.08)",
                     border: "1px solid rgba(106,140,255,0.15)",
                     borderRadius: 8,
-                    width: 32, height: 32,
+                    width: 30, height: 30,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     cursor: "pointer", color: "#6a8cff",
                     transition: "all 0.2s",
@@ -1121,7 +1137,7 @@ export default function Agent({ user }) {
                   onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.15)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.08)"; }}
                 >
-                  <Clipboard size={15} />
+                  <Clipboard size={14} />
                 </button>
 
                 <FileUpload
@@ -1133,115 +1149,248 @@ export default function Agent({ user }) {
                 />
               </div>
             </div>
-          )}
 
-          {/* SCROLLABLE AREA — only child that scrolls */}
+            {/* SCROLLABLE AREA — only child that scrolls */}
+            <div 
+              className="chat-scroll-area"
+              style={{
+                flex: 1,
+                height: "100%",
+                minHeight: 0,
+                overflowY: "auto",
+                overflowX: "hidden",
+                scrollBehavior: "smooth",
+                padding: "18px 18px 24px",
+                paddingRight: (showEvalPanel && evaluation) ? 306 : 18,
+                transition: "padding-right 0.3s ease",
+              }}
+            >
+              {/* File context indicator (inside scrollable area) */}
+              <AnimatePresence>
+                {fileContext && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10,
+                      padding: "8px 12px", borderRadius: 12, marginBottom: 10,
+                      background: "rgba(255,255,255,0.85)",
+                      border: "1px solid rgba(0,0,0,0.05)",
+                      boxShadow: "0 4px 12px rgba(120,140,255,0.08)",
+                    }}
+                  >
+                    <div style={{
+                      width: 28, height: 28, borderRadius: 8,
+                      background: "rgba(100,140,255,0.15)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#6a8cff", flexShrink: 0,
+                    }}>
+                      <FileText size={14} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: "0.7rem", fontWeight: 600, color: "#1a1a1a",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>
+                        📎 {fileContext.fileName}
+                      </div>
+                      <div style={{ fontSize: "0.58rem", color: "#6b7280" }}>
+                        {fileContext.documentType || "Document"}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setFileContext(null)}
+                      style={{
+                        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                        background: "rgba(0,0,0,0.04)",
+                        border: "1px solid rgba(0,0,0,0.05)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        cursor: "pointer", color: "#ef4444",
+                      }}
+                      title="Remove file"
+                    >
+                      <X size={11} />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Empty state */}
+              <AnimatePresence>
+                {messages.length === 0 && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ delay: 0.8, duration: 0.5 }}
+                    style={{
+                      display: "flex", flexDirection: "column",
+                      alignItems: "center", justifyContent: "center",
+                      minHeight: "65%", gap: 14,
+                    }}
+                  >
+                    <div style={{
+                      width: 44, height: 44, borderRadius: 12,
+                      background: "rgba(106,140,255,0.1)", border: "1px solid rgba(106,140,255,0.2)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      <Cpu size={18} color="#6a8cff" />
+                    </div>
+                    <div style={{ textAlign: "center" }}>
+                      <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "#1a1a1a", marginBottom: 2 }}>
+                        Ready to chat
+                      </p>
+                      <p style={{ fontSize: "0.72rem", color: "#6b7280" }}>
+                        Speak to start talking with AIRA.
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <TransientChatBox
+                messages={messages}
+                onRefineEmail={handleUserSpeak}
+                onSendEmail={() => handleUserSpeak("Send it.")}
+              />
+            </div>
+
+          </div>
+        )}
+
+        {/* ── MOBILE EVALUATION OVERLAY (Full-screen sheet on mobile when requested) ── */}
+        <AnimatePresence>
+          {isMobile && showEvalPanel && evaluation && (
+            <motion.div
+              key="eval-mobile"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              transition={{ duration: 0.25 }}
+              style={{
+                position: "fixed",
+                top: "calc(56px + env(safe-area-inset-top, 0px))",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 1200,
+                background: "#ffffff",
+                overflowY: "auto",
+              }}
+            >
+              <MinimalEvaluationOverlay evaluation={evaluation} onClose={() => setShowEvalPanel(false)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── MOBILE ONE-HANDED QUICK CONTROLS BAR ── */}
+        {isMobile && (
           <div 
-            className="chat-scroll-area"
             style={{
-              flex: 1,
-              height: "100%",
-              minHeight: 0,
-              overflowY: "auto",
-              overflowX: "hidden",
-              scrollBehavior: "smooth",
-              padding: isMobile ? "12px 12px 30px" : "20px 20px 28px",
-              paddingRight: (showEvalPanel && evaluation && !isMobile) ? 306 : (isMobile ? 12 : 20),
-              transition: "padding-right 0.3s ease",
-              maxHeight: isMobile ? "60vh" : "none",
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              padding: "4px 0 max(16px, env(safe-area-inset-bottom, 16px))",
+              flexShrink: 0,
+              zIndex: 10,
             }}
           >
-            {/* File context indicator (inside scrollable area) */}
-            <AnimatePresence>
-              {fileContext && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    padding: "10px 14px", borderRadius: 12, marginBottom: 14,
-                    background: "rgba(255,255,255,0.8)",
-                    border: "1px solid rgba(0,0,0,0.05)",
-                    boxShadow: "0 5px 15px rgba(120,140,255,0.1)",
-                  }}
-                >
-                  <div style={{
-                    width: 32, height: 32, borderRadius: 8,
-                    background: "rgba(100,140,255,0.15)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "#6a8cff", flexShrink: 0,
-                  }}>
-                    <FileText size={15} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontSize: "0.72rem", fontWeight: 600, color: "#1a1a1a",
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                    }}>
-                      📎 {fileContext.fileName}
-                    </div>
-                    <div style={{ fontSize: "0.6rem", color: "#6b7280" }}>
-                      {fileContext.documentType || "Document"} — Ask questions about this file
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setFileContext(null)}
-                    style={{
-                      width: 24, height: 24, borderRadius: 6, flexShrink: 0,
-                      background: "rgba(0,0,0,0.04)",
-                      border: "1px solid rgba(0,0,0,0.05)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      cursor: "pointer", color: "#ef4444",
-                      transition: "all 0.2s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
-                    title="Remove file"
-                  >
-                    <X size={11} />
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <button
+              onClick={() => {
+                setShowHistory(true);
+                loadHistory();
+              }}
+              title="Chat History"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "8px 13px",
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.9)",
+                border: "1px solid rgba(106,140,255,0.2)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                color: "#374151",
+                fontSize: "0.74rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              <MessageCircle size={14} color="#3b82f6" />
+              History
+            </button>
 
-            {/* Empty state */}
-            <AnimatePresence>
-              {messages.length === 0 && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ delay: 0.8, duration: 0.5 }}
-                  style={{
-                    display: "flex", flexDirection: "column",
-                    alignItems: "center", justifyContent: "center",
-                    minHeight: "65%", gap: 14,
-                  }}
-                >
-                  <div style={{
-                    width: 44, height: 44, borderRadius: 14,
-                    background: "rgba(106,140,255,0.1)", border: "1px solid rgba(106,140,255,0.2)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}>
-                    <Cpu size={18} color="#6a8cff" />
-                  </div>
-                  <div style={{ textAlign: "center" }}>
-                    <p style={{ fontSize: "0.82rem", fontWeight: 500, color: "#1a1a1a", marginBottom: 6 }}>
-                      Ready to chat
-                    </p>
-                    <p style={{ fontSize: "0.72rem", color: "#6b7280" }}>
-                      AIRA is ready to assist you.
-                    </p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <button
+              onClick={async () => {
+                if (abortControllerRef.current) {
+                  abortControllerRef.current.abort();
+                  abortControllerRef.current = null;
+                }
+                activeRequestIdRef.current += 1;
+                voice.cancelActiveSpeech();
 
-            <TransientChatBox messages={messages} onRefineEmail={handleUserSpeak} />
+                if (user?.uid) {
+                  const newId = await createNewThread(user.uid);
+                  setChatId(newId);
+                  setMessages([]);
+                  messageHistoryRef.current = [];
+                  const reply = "New conversation started. What's on your mind?";
+                  addMessage("aira", reply);
+                  voice.speak(reply);
+                }
+              }}
+              title="New Conversation"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "8px 13px",
+                borderRadius: 12,
+                background: "linear-gradient(135deg, rgba(106,140,255,0.18), rgba(59,130,246,0.12))",
+                border: "1px solid rgba(106,140,255,0.25)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                color: "#1d4ed8",
+                fontSize: "0.74rem",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              <Cpu size={14} color="#3b82f6" />
+              New
+            </button>
+
+            <button
+              onClick={() => setShowPasteModal(true)}
+              title="Paste text block"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 34,
+                height: 34,
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.9)",
+                border: "1px solid rgba(106,140,255,0.2)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                color: "#6a8cff",
+                cursor: "pointer",
+              }}
+            >
+              <Clipboard size={14} />
+            </button>
+
+            <FileUpload
+              fileContext={null}
+              onFileAnalyzed={(result) => setFileContext(result)}
+              onClearFile={() => setFileContext(null)}
+              addMessage={addMessage}
+              voiceSpeak={(text) => voice.speak(text)}
+            />
           </div>
-
-        </div>
+        )}
       </main>
 
       {/* ════════════════════════════════════════
@@ -1251,7 +1400,7 @@ export default function Agent({ user }) {
         ref={profileRef}
         style={{
           position: "fixed",
-          top: isMobile ? 12 : 20,
+          top: isMobile ? "calc(10px + env(safe-area-inset-top, 0px))" : 20,
           right: isMobile ? 16 : 24,
           zIndex: 1000,
         }}
@@ -1365,6 +1514,50 @@ export default function Agent({ user }) {
               >
                 <Cpu size={15} />
                 New Conversation
+              </button>
+
+              {/* Gmail Connection Option */}
+              <button
+                onClick={() => {
+                  setShowUserMenu(false);
+                  if (!gmailStatus?.connected) {
+                    window.location.href = `${API_BASE}/api/gmail/auth`;
+                  }
+                }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 12px", borderRadius: 8,
+                  fontSize: "0.85rem", fontWeight: 500,
+                  color: gmailStatus?.connected ? "#10b981" : "#4b5563",
+                  background: "transparent", border: "none",
+                  cursor: gmailStatus?.connected ? "default" : "pointer",
+                  transition: "all 0.2s ease",
+                  textAlign: "left",
+                }}
+                onMouseEnter={(e) => {
+                  if (!gmailStatus?.connected) {
+                    e.currentTarget.style.background = "#f3f6ff";
+                    e.currentTarget.style.color = "#3b82f6";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!gmailStatus?.connected) {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = "#4b5563";
+                  }
+                }}
+              >
+                <Mail size={15} color={gmailStatus?.connected ? "#10b981" : "#6b7280"} />
+                <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                  <span style={{ fontSize: "0.82rem" }}>
+                    {gmailStatus?.connected ? "Gmail Connected" : "Connect Gmail"}
+                  </span>
+                  {gmailStatus?.connected && gmailStatus?.emailAddress && (
+                    <span style={{ fontSize: "0.62rem", color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {gmailStatus.emailAddress}
+                    </span>
+                  )}
+                </div>
               </button>
 
               <button
@@ -1633,20 +1826,20 @@ export default function Agent({ user }) {
         .delete-history-btn:hover { background: #fee2e2 !important; border-radius: 6px; }
 
         @media (max-width: 768px) {
-          .orb-container {
-            transform: scale(0.65) !important;
-            margin-top: 10px !important;
-            margin-bottom: 5px !important;
+          .chat-panel {
+            display: none !important;
           }
-          .chat-scroll-area {
-            max-height: 55vh !important;
+          .orb-container {
+            transform: scale(1) !important;
+            margin: 0 !important;
           }
           header {
-            backdrop-filter: blur(5px) !important;
-            background: rgba(255, 255, 255, 0.8) !important;
+            backdrop-filter: blur(12px) !important;
+            background: rgba(255, 255, 255, 0.88) !important;
           }
           main {
-             overflow: hidden !important;
+            overflow-x: hidden !important;
+            max-width: 100vw !important;
           }
         }
       `}</style>

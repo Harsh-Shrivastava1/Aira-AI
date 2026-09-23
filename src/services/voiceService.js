@@ -8,7 +8,207 @@
  * modifying the conversation or React hook layers.
  */
 
-import { VOICE_CONFIG, matchVoiceCommand } from "./voiceConfig.js";
+import { VOICE_CONFIG, matchVoiceCommand, INTERRUPTION_PHRASES } from "./voiceConfig.js";
+
+/**
+ * Normalizes text for voice matching and comparison:
+ * Lowercases, strips punctuation, normalizes whitespace.
+ */
+export function normalizeTranscript(text) {
+  if (!text || typeof text !== "string") return "";
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[.,/#!$%^&*;:{}=\-_`~()?]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Character trigram helper to evaluate phonetic/ASR similarity
+ */
+function getTrigrams(str) {
+  const s = ` ${str} `;
+  const trigrams = new Set();
+  for (let i = 0; i <= s.length - 3; i++) {
+    trigrams.add(s.slice(i, i + 3));
+  }
+  return trigrams;
+}
+
+function calculateTrigramSimilarity(s1, s2) {
+  if (!s1 || !s2) return 0;
+  const t1 = getTrigrams(s1);
+  const t2 = getTrigrams(s2);
+  let intersect = 0;
+  for (const tri of t1) {
+    if (t2.has(tri)) intersect++;
+  }
+  const union = t1.size + t2.size - intersect;
+  return union > 0 ? intersect / union : 0;
+}
+
+/**
+ * Reusable Acoustic Echo Evaluator
+ * 
+ * Safely evaluates whether a heard transcript matches text recently spoken by AIRA.
+ * Used during active speech and during the trailing post-TTS buffer window.
+ * 
+ * @param {string} transcript 
+ * @param {string} lastSpokenText 
+ * @param {string[]|string} spokenChunks 
+ * @returns {boolean}
+ */
+export function isEchoTranscript(transcript, lastSpokenText = "", spokenChunks = []) {
+  if (!transcript || typeof transcript !== "string") return false;
+
+  const cleanedHeard = normalizeTranscript(transcript);
+  if (!cleanedHeard || cleanedHeard.length < VOICE_CONFIG.noiseFilter.minNonCommandLength) {
+    return true; // Noise click or empty fragment
+  }
+
+  // Fast-path: Explicit voice command is NEVER echo
+  if (matchVoiceCommand(cleanedHeard)) {
+    return false;
+  }
+
+  // Fast-path: Known interruption phrase or prefix is NEVER echo
+  const isInterruption = (INTERRUPTION_PHRASES || []).some(
+    (phrase) => cleanedHeard === phrase || cleanedHeard.startsWith(phrase + " ") || cleanedHeard.startsWith(phrase + ",")
+  );
+  if (isInterruption) {
+    return false;
+  }
+
+  // Combine spoken texts
+  const cleanFull = normalizeTranscript(lastSpokenText);
+  const cleanChunks = (Array.isArray(spokenChunks) ? spokenChunks : [spokenChunks])
+    .filter(Boolean)
+    .map(normalizeTranscript)
+    .filter(Boolean);
+
+  if (!cleanFull && cleanChunks.length === 0) {
+    return false;
+  }
+
+  const heardWords = cleanedHeard.split(" ").filter(Boolean);
+  if (heardWords.length === 0) return true;
+
+  // Single-word transcript:
+  // A single word is only an echo if the assistant's chunk was literally just that single word
+  // (e.g. AIRA said "Understood." or "Okay."). It must NEVER suppress genuine single-word answers
+  // (e.g. "Java", "Python", "React", "Yes", "No") when answering questions.
+  if (heardWords.length === 1) {
+    return cleanChunks.some((chunk) => chunk === cleanedHeard) || cleanFull === cleanedHeard;
+  }
+
+  // Token overlap calculation against spoken text
+  const allSpokenWords = new Set(
+    cleanFull.split(" ").concat(cleanChunks.flatMap((c) => c.split(" "))).filter(Boolean)
+  );
+
+  let matchCount = 0;
+  for (const word of heardWords) {
+    if (allSpokenWords.has(word)) matchCount++;
+  }
+  const tokenOverlap = matchCount / heardWords.length;
+
+  // Two-word phrase:
+  // Must be an exact subphrase of a recent chunk with 100% token overlap to be echo.
+  if (heardWords.length === 2) {
+    const isExactSubphraseInChunks = cleanChunks.some(
+      (chunk) => chunk.includes(cleanedHeard) && cleanedHeard.length >= 8
+    );
+    return isExactSubphraseInChunks && tokenOverlap === 1.0;
+  }
+
+  // Three or more words (heardWords.length >= 3):
+  // A. Exact continuous subphrase matching
+  const isPhraseInChunks = cleanChunks.some((chunk) => chunk.includes(cleanedHeard));
+  const isPhraseInFull = cleanFull && cleanFull.includes(cleanedHeard) && cleanedHeard.length >= 12;
+  if (isPhraseInChunks || isPhraseInFull) {
+    return true;
+  }
+
+  // B. High token overlap (>= 70%)
+  if (tokenOverlap >= 0.70) {
+    return true;
+  }
+
+  // C. Combined Token Overlap (45%+) + Trigram Similarity (ASR phonetic variation)
+  let maxTrigramSim = 0;
+  for (const chunk of cleanChunks) {
+    const sim = calculateTrigramSimilarity(cleanedHeard, chunk);
+    if (sim > maxTrigramSim) maxTrigramSim = sim;
+  }
+  if (cleanFull) {
+    const fullSim = calculateTrigramSimilarity(cleanedHeard, cleanFull);
+    if (fullSim > maxTrigramSim) maxTrigramSim = fullSim;
+  }
+
+  if (tokenOverlap >= 0.45 && maxTrigramSim >= 0.35) {
+    return true;
+  }
+
+  if (maxTrigramSim >= 0.75) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Multi-layer Acoustic Echo vs User Interruption Classifier
+ * 
+ * Prevents AIRA from interpreting her own speaker audio as user speech
+ * while ensuring instant, sensitive detection when the user actually speaks or commands.
+ */
+export function classifyMicrophoneInput({
+  heardText,
+  activeSpokenChunk,
+  recentSpokenChunks = [],
+  lastSpokenText,
+  isSpeaking,
+  elapsedSinceChunkStartMs
+}) {
+  if (!isSpeaking) {
+    return { isEcho: false, isInterruption: false, reason: "assistant_silent" };
+  }
+
+  const cleanedHeard = normalizeTranscript(heardText);
+  if (!cleanedHeard || cleanedHeard.length < VOICE_CONFIG.noiseFilter.minNonCommandLength) {
+    return { isEcho: true, isInterruption: false, reason: "noise_or_too_short" };
+  }
+
+  // 1. High-priority voice command match (e.g. "stop", "wait", "repeat that")
+  const matchedCmd = matchVoiceCommand(cleanedHeard);
+  if (matchedCmd) {
+    return { isEcho: false, isInterruption: true, reason: `voice_command_${matchedCmd}`, command: matchedCmd };
+  }
+
+  // 2. Interruption phrase fast-path (e.g. "wait", "actually explain in Java instead")
+  const isInterruptionPhrase = (INTERRUPTION_PHRASES || []).some(
+    (phrase) => cleanedHeard === phrase || cleanedHeard.startsWith(phrase + " ") || cleanedHeard.startsWith(phrase + ",")
+  );
+  if (isInterruptionPhrase) {
+    return { isEcho: false, isInterruption: true, reason: "interruption_keyword" };
+  }
+
+  // 3. Audio startup immunity window (first 150ms of any TTS chunk)
+  if (elapsedSinceChunkStartMs !== undefined && elapsedSinceChunkStartMs < 150) {
+    return { isEcho: true, isInterruption: false, reason: "tts_startup_immunity" };
+  }
+
+  // 4. Multi-layer echo detection
+  const chunksToCheck = [activeSpokenChunk, ...(Array.isArray(recentSpokenChunks) ? recentSpokenChunks : [])].filter(Boolean);
+  const isEcho = isEchoTranscript(cleanedHeard, lastSpokenText, chunksToCheck);
+
+  if (isEcho) {
+    return { isEcho: true, isInterruption: false, reason: "acoustic_echo_detected" };
+  }
+
+  // 5. Otherwise, genuine user interruption
+  return { isEcho: false, isInterruption: true, reason: "distinct_user_speech" };
+}
 
 /**
  * Robust voice selection strategy:
@@ -152,80 +352,6 @@ export function chunkSpeechText(text, maxChunkLen = VOICE_CONFIG.chunking.maxChu
   return chunks.length > 0 ? chunks : [clean];
 }
 
-/**
- * Multi-layer Acoustic Echo vs User Interruption Classifier
- * 
- * Prevents AIRA from interpreting her own speaker audio as user speech
- * while ensuring instant, sensitive detection when the user actually speaks or commands.
- */
-export function classifyMicrophoneInput({
-  heardText,
-  activeSpokenChunk,
-  lastSpokenText,
-  isSpeaking,
-  elapsedSinceChunkStartMs
-}) {
-  if (!isSpeaking) {
-    return { isEcho: false, isInterruption: false, reason: "assistant_silent" };
-  }
-
-  const cleanedHeard = (heardText || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w\s]/g, "")
-    .replace(/\s+/g, " ");
-
-  if (!cleanedHeard || cleanedHeard.length < VOICE_CONFIG.noiseFilter.minNonCommandLength) {
-    return { isEcho: true, isInterruption: false, reason: "noise_or_too_short" };
-  }
-
-  // 1. High-priority voice command match (e.g. "stop", "wait", "repeat that")
-  const matchedCmd = matchVoiceCommand(cleanedHeard);
-  if (matchedCmd) {
-    return { isEcho: false, isInterruption: true, reason: `voice_command_${matchedCmd}`, command: matchedCmd };
-  }
-
-  // 2. Interruption keyword fast-path
-  const INTERRUPTION_KEYWORDS = ["wait", "stop", "hold on", "hang on", "pause", "no", "actually", "cancel", "shut up", "repeat", "slower", "faster", "listen"];
-  const heardWords = cleanedHeard.split(" ").filter(Boolean);
-  const hasInterruptionKeyword = heardWords.some(w => INTERRUPTION_KEYWORDS.includes(w));
-  if (hasInterruptionKeyword && heardWords.length <= 5) {
-    return { isEcho: false, isInterruption: true, reason: "interruption_keyword" };
-  }
-
-  // 3. Audio startup immunity window (first 200ms of any TTS chunk)
-  if (elapsedSinceChunkStartMs !== undefined && elapsedSinceChunkStartMs < 200) {
-    return { isEcho: true, isInterruption: false, reason: "tts_startup_immunity" };
-  }
-
-  // 4. Token overlap comparison against actively spoken chunk and full response text
-  const cleanActive = (activeSpokenChunk || "").toLowerCase().replace(/[^\w\s]/g, "").replace(/\s+/g, " ");
-  const cleanFull = (lastSpokenText || "").toLowerCase().replace(/[^\w\s]/g, "").replace(/\s+/g, " ");
-
-  const activeWords = new Set(cleanActive.split(" ").filter(Boolean));
-  const fullWords = new Set(cleanFull.split(" ").filter(Boolean));
-
-  let matchInActive = 0;
-  let matchInFull = 0;
-
-  for (const word of heardWords) {
-    if (activeWords.has(word)) matchInActive++;
-    if (fullWords.has(word)) matchInFull++;
-  }
-
-  const activeOverlapRatio = heardWords.length > 0 ? matchInActive / heardWords.length : 0;
-  const fullOverlapRatio = heardWords.length > 0 ? matchInFull / heardWords.length : 0;
-
-  // Substring match
-  const isDirectSubstring = (cleanActive.includes(cleanedHeard) || cleanFull.includes(cleanedHeard)) && cleanedHeard.length > 5;
-
-  if (isDirectSubstring || activeOverlapRatio >= 0.60 || fullOverlapRatio >= 0.70) {
-    return { isEcho: true, isInterruption: false, reason: "acoustic_echo_overlap", activeOverlapRatio, fullOverlapRatio };
-  }
-
-  // Otherwise, genuine user interruption
-  return { isEcho: false, isInterruption: true, reason: "distinct_user_speech" };
-}
 
 /**
  * Pre-flight microphone permission and hardware check

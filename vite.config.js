@@ -26,25 +26,29 @@ function localApiPlugin(env) {
 
           if (fs.existsSync(filePath)) {
             try {
-              // Parse body for JSON / Text requests (skip multipart for Busboy streaming)
-              if (req.headers['content-type']?.includes('application/json')) {
-                const chunks = [];
-                for await (const chunk of req) {
-                  chunks.push(chunk);
-                }
-                const raw = Buffer.concat(chunks).toString('utf-8');
-                req.body = raw ? JSON.parse(raw) : {};
-              } else if (!req.headers['content-type']?.includes('multipart/form-data')) {
-                const chunks = [];
-                for await (const chunk of req) {
-                  chunks.push(chunk);
-                }
-                const raw = Buffer.concat(chunks).toString('utf-8');
-                try {
+              // Parse body for JSON / Text requests (skip GET/HEAD and multipart for Busboy streaming)
+              if (req.method !== 'GET' && req.method !== 'HEAD') {
+                if (req.headers['content-type']?.includes('application/json')) {
+                  const chunks = [];
+                  for await (const chunk of req) {
+                    chunks.push(chunk);
+                  }
+                  const raw = Buffer.concat(chunks).toString('utf-8');
                   req.body = raw ? JSON.parse(raw) : {};
-                } catch {
-                  req.body = raw;
+                } else if (!req.headers['content-type']?.includes('multipart/form-data')) {
+                  const chunks = [];
+                  for await (const chunk of req) {
+                    chunks.push(chunk);
+                  }
+                  const raw = Buffer.concat(chunks).toString('utf-8');
+                  try {
+                    req.body = raw ? JSON.parse(raw) : {};
+                  } catch {
+                    req.body = raw;
+                  }
                 }
+              } else {
+                req.body = {};
               }
 
               // Query params
@@ -62,6 +66,14 @@ function localApiPlugin(env) {
               };
               res.send = (data) => {
                 res.end(data);
+                return res;
+              };
+              res.redirect = (statusCodeOrUrl, url) => {
+                const targetUrl = typeof statusCodeOrUrl === 'string' ? statusCodeOrUrl : url;
+                const status = typeof statusCodeOrUrl === 'number' ? statusCodeOrUrl : 302;
+                res.statusCode = status;
+                res.setHeader('Location', targetUrl);
+                res.end();
                 return res;
               };
 

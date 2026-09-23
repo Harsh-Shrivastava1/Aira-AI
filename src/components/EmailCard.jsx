@@ -1,14 +1,17 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mail, Copy, Check, Feather, Type } from "lucide-react";
+import { Mail, Copy, Check, Feather, Type, Send } from "lucide-react";
 
-export default function EmailCard({ subject, body, onRefine }) {
+export default function EmailCard({ to, subject, body, onRefine, onSend }) {
   const [copied, setCopied]     = useState(false);
   const [activeTone, setTone]   = useState(null); // "formal" | "casual"
 
-  const fullText = subject
-    ? `Subject: ${subject}\n\n${body}`
-    : body;
+  const fullText = [
+    to ? `To: ${to}` : null,
+    subject ? `Subject: ${subject}` : null,
+    "",
+    body
+  ].filter((x) => x !== null).join("\n");
 
   /* ── Copy to clipboard ── */
   const handleCopy = async () => {
@@ -80,9 +83,28 @@ export default function EmailCard({ subject, body, onRefine }) {
         </div>
         {/* top accent line */}
         <div style={{ fontSize: "0.6rem", color: "rgba(100,116,139,0.5)" }}>
-          Ready to send
+          Ready for review
         </div>
       </div>
+
+      {/* ── Recipient row ── */}
+      {to && (
+        <div style={{
+          padding: "8px 16px 7px",
+          borderBottom: "1px solid rgba(255,255,255,0.05)",
+          background: "rgba(255,255,255,0.025)",
+        }}>
+          <div style={{
+            fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.14em",
+            textTransform: "uppercase", color: "#475569", marginBottom: 2,
+          }}>
+            To
+          </div>
+          <div style={{ fontSize: "0.8rem", fontWeight: 500, color: "#93c5fd" }}>
+            {to}
+          </div>
+        </div>
+      )}
 
       {/* ── Subject row ── */}
       {subject && (
@@ -122,6 +144,27 @@ export default function EmailCard({ subject, body, onRefine }) {
         borderTop: "1px solid rgba(255,255,255,0.055)",
         background: "rgba(255,255,255,0.015)",
       }}>
+
+        {/* Send button (explicit user confirmation) */}
+        {onSend && (
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            onClick={() => onSend({ to, subject, body })}
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "7px 13px", borderRadius: 8,
+              fontSize: "0.7rem", fontWeight: 600, cursor: "pointer",
+              color: "#ffffff",
+              background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+              border: "1px solid rgba(59,130,246,0.5)",
+              boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+              transition: "all 0.25s",
+            }}
+          >
+            <Send size={12} />
+            Send Email
+          </motion.button>
+        )}
 
         {/* Copy button */}
         <motion.button
