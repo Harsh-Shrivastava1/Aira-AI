@@ -353,33 +353,76 @@ export function chunkSpeechText(text, maxChunkLen = VOICE_CONFIG.chunking.maxChu
 }
 
 
+export function airaVoiceDebug(msg, data) {
+  if (!import.meta.env.DEV) return;
+  const str = data !== undefined 
+    ? `[AIRA VOICE DEBUG] ${msg} ` + (typeof data === "object" ? JSON.stringify(data) : data) 
+    : `[AIRA VOICE DEBUG] ${msg}`;
+  if (typeof window !== "undefined" && (window.__AIRA_VOICE_DEBUG__ || localStorage?.getItem("AIRA_VOICE_DEBUG") === "true")) {
+    console.log(str);
+  }
+  if (typeof window !== "undefined") {
+    window.__AIRA_VOICE_DEBUG_LOGS__ = window.__AIRA_VOICE_DEBUG_LOGS__ || [];
+    window.__AIRA_VOICE_DEBUG_LOGS__.push({ time: Date.now(), msg, data });
+  }
+}
+
 /**
- * Pre-flight microphone permission and hardware check
- * Verifies that the audio input stream is available and healthy
- * without permanently locking the hardware device.
+ * Pre-flight microphone permission check.
+ *
+ * IMPORTANT: Uses navigator.permissions.query instead of getUserMedia.
+ *
+ * getUserMedia() acquires the OS-level audio device handle. Calling track.stop()
+ * immediately afterward does NOT synchronously release the device in Chrome/Edge on
+ * Windows — the handle lingers in the audio subsystem. When SpeechRecognition.start()
+ * fires milliseconds later it gets a silent or conflicting audio stream, causing
+ * recognition.onstart to fire but recognition.onresult to never fire (the "LISTENING
+ * but microphone does nothing" runtime bug).
+ *
+ * navigator.permissions.query({ name: "microphone" }) checks permission state without
+ * touching the hardware device at all, which is the correct preflight approach.
+ * SpeechRecognition's own onerror handler already handles "not-allowed" and
+ * "audio-capture" errors if permission is denied or no device exists.
  */
 export async function checkMicrophoneHealth() {
-  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-    return { available: false, error: "mediaDevices not supported" };
+  airaVoiceDebug("2. checkMicrophoneHealth() called");
+
+  if (typeof navigator === "undefined") {
+    const res = { available: false, error: "navigator not available" };
+    airaVoiceDebug("4. checkMicrophoneHealth() result", res);
+    return res;
   }
 
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-
-    const tracks = stream.getAudioTracks();
-    const isHealthy = tracks.length > 0 && tracks[0].readyState === "live";
-
-    // Release test tracks immediately
-    tracks.forEach((t) => t.stop());
-
-    return { available: isHealthy, error: null };
-  } catch (err) {
-    return { available: false, error: err.name || err.message };
+  // Fast path: permissions API available (Chrome, Edge, Firefox)
+  if (navigator.permissions?.query) {
+    try {
+      const result = await navigator.permissions.query({ name: "microphone" });
+      airaVoiceDebug("3. microphone permission state", { state: result.state });
+      if (result.state === "denied") {
+        const res = { available: false, error: "NotAllowedError" };
+        airaVoiceDebug("4. checkMicrophoneHealth() result", res);
+        return res;
+      }
+      // "granted" or "prompt" — SpeechRecognition will handle the prompt itself
+      const res = { available: true, error: null };
+      airaVoiceDebug("4. checkMicrophoneHealth() result", res);
+      return res;
+    } catch (err) {
+      airaVoiceDebug("3. microphone permission state query failed or unsupported", { error: err?.message });
+      // permissions API not supported for "microphone" on this browser — fall through
+    }
   }
+
+  // Fallback: check if mediaDevices exists at all (no hardware acquisition)
+  if (!navigator.mediaDevices?.getUserMedia) {
+    const res = { available: false, error: "mediaDevices not supported" };
+    airaVoiceDebug("4. checkMicrophoneHealth() result", res);
+    return res;
+  }
+
+  // If we reach here, we can't determine permission state without getUserMedia,
+  // so optimistically return available=true and let SpeechRecognition handle errors.
+  const res = { available: true, error: null };
+  airaVoiceDebug("4. checkMicrophoneHealth() result (fallback)", res);
+  return res;
 }

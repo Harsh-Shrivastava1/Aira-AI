@@ -12,6 +12,7 @@ import { auth } from "../config/firebase";
 import { API_BASE } from "../config/api";
 import { classifyError, sanitizeLogDetails, ERROR_MESSAGES } from "../services/errorRecoveryService";
 import { useToast } from "../components/Toast";
+import { airaVoiceDebug } from "../services/voiceService";
 const API = `${API_BASE}/api`;
 
 /**
@@ -698,9 +699,16 @@ export default function Agent({ user }) {
   }, [voice]);
 
   const handleUserSpeak = useCallback(async (transcript) => {
+    airaVoiceDebug("18. onUserSpeak() called", { transcript });
     if (!transcript || typeof transcript !== "string") return;
     const cleanTranscript = transcript.trim();
     if (!cleanTranscript) return;
+
+    // Hard safety guard: Never process speech while AIRA is actively speaking
+    if (voice.state === "speaking") {
+      console.log("[Agent] Discarded speech input received while AIRA is speaking:", cleanTranscript);
+      return;
+    }
 
     // Idempotency turn guard: Ignore accidental duplicate transcript within 1500ms or while active turn is thinking/speaking
     const now = Date.now();
@@ -716,7 +724,7 @@ export default function Agent({ user }) {
     }
     lastSubmittedTurnRef.current = { text: cleanTranscript, timestamp: now };
 
-    voice.unlock(); 
+    voice.unlock();
 
     // Cancel and abort previous in-flight AI request
     if (abortControllerRef.current) {
@@ -725,7 +733,7 @@ export default function Agent({ user }) {
     const requestId = ++activeRequestIdRef.current;
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    
+
     // If there's a pending greeting that hasn't been spoken yet, play it now
     if (pendingGreetingRef.current) {
       voice.speak(pendingGreetingRef.current);
@@ -842,13 +850,18 @@ export default function Agent({ user }) {
       }
 
       const tReqStart = performance.now();
+      airaVoiceDebug("19. API request started", {
+        endpoint: `${API_BASE}/api/chat`,
+        chatId: currentChatId || chatId,
+        historyLength: messageHistoryRef.current.length
+      });
       const resp = await fetchWithRetry(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: requestHeaders,
         signal: controller.signal,
-        body: JSON.stringify({ 
-          messageHistory: messageHistoryRef.current, 
-          userName, 
+        body: JSON.stringify({
+          messageHistory: messageHistoryRef.current,
+          userName,
           memory: memoryTextRef.current || memoryText,
           userId: user?.uid,
           chatId: currentChatId || chatId,
@@ -886,7 +899,7 @@ export default function Agent({ user }) {
       const reply = data.reply || "Hmm, say that again?";
 
       messageHistoryRef.current.push({ role: "assistant", content: reply });
-      
+
       // Auto-detect code blocks in AIRA's reply
       const hasCode = reply.includes("```") || (reply.includes("{") && reply.includes("}") && reply.includes(";"));
       addMessage("aira", reply, data.emailDraft, hasCode ? "code" : "text");
@@ -919,7 +932,7 @@ export default function Agent({ user }) {
         console.log("[Agent] AI Request cleanly aborted by user interruption");
         return;
       }
-      const classified = classifyError(err, { 
+      const classified = classifyError(err, {
         status: err.status,
         category: err.category,
         retryAfter: err.retryAfter
@@ -976,7 +989,7 @@ export default function Agent({ user }) {
       addMessage("user", summary);
       if (user?.uid && chatId) saveMessage(user.uid, chatId, "user", summary, "text");
     }
-    
+
     voice.setThinking(currentMode === "code" ? "Analyzing code..." : "Thinking...");
 
     try {
@@ -992,7 +1005,7 @@ export default function Agent({ user }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          question: currentMode === "code" 
+          question: currentMode === "code"
             ? "You are a senior software engineer. Analyze this code, fix errors, explain issues, and return corrected code properly formatted."
             : "Please analyze this text, summarize it, and extract key points.",
           fileContent: isLarge ? firstChunk : textToAnalyze,
@@ -1021,7 +1034,7 @@ export default function Agent({ user }) {
     if (hasStarted) return;
     setHasStarted(true);
     setShowActivation(false);
-    
+
     // Step 1: Unlock and Greeting
     voice.unlock();
     const greeting = pickGreeting();
@@ -1265,7 +1278,7 @@ export default function Agent({ user }) {
           )}
         </div>
       </header>
-      
+
       {/* ─── ACTIVATION OVERLAY ─── */}
       <AnimatePresence>
         {showActivation && (
@@ -1323,7 +1336,7 @@ export default function Agent({ user }) {
       }}>
 
         {/* ── ORB PANEL: Dominant centerpiece ── */}
-        <div 
+        <div
           className="orb-panel"
           style={{
             display: "flex",
@@ -1343,7 +1356,7 @@ export default function Agent({ user }) {
            * ORB WRAPPER — Centered with balanced spacing.
            * VoiceOrb itself is untouched.
            */}
-          <div 
+          <div
             onClick={() => {
               if (!hasStarted) handleActivation();
             }}
@@ -1370,7 +1383,7 @@ export default function Agent({ user }) {
 
         {/* ── CONVERSATION PANEL: Visible on desktop only (hidden in phone view) ── */}
         {!isMobile && (
-          <div 
+          <div
             className="chat-panel"
             style={{
               flexGrow: 0,
@@ -1469,7 +1482,7 @@ export default function Agent({ user }) {
             </div>
 
             {/* SCROLLABLE AREA — only child that scrolls */}
-            <div 
+            <div
               className="chat-scroll-area"
               style={{
                 flex: 1,
@@ -1604,7 +1617,7 @@ export default function Agent({ user }) {
 
         {/* ── MOBILE ONE-HANDED QUICK CONTROLS BAR ── */}
         {isMobile && (
-          <div 
+          <div
             style={{
               width: "100%",
               display: "flex",
@@ -2107,7 +2120,7 @@ export default function Agent({ user }) {
               </div>
 
               <div style={{ display: "flex", gap: 10 }}>
-                <button 
+                <button
                   onClick={() => setPasteMode("text")}
                   style={{
                     flex: 1, padding: "10px", borderRadius: 12,
@@ -2119,7 +2132,7 @@ export default function Agent({ user }) {
                 >
                   Text Mode
                 </button>
-                <button 
+                <button
                   onClick={() => setPasteMode("code")}
                   style={{
                     flex: 1, padding: "10px", borderRadius: 12,
@@ -2141,10 +2154,10 @@ export default function Agent({ user }) {
                 style={{
                   width: "100%", height: 300,
                   padding: 18, borderRadius: 16,
-                  border: "1px solid #e2e8f0", 
+                  border: "1px solid #e2e8f0",
                   background: pasteMode === "code" ? "#0f172a" : "#f8fafc",
                   color: pasteMode === "code" ? "#e2e8f0" : "#1e293b",
-                  fontSize: "0.85rem", 
+                  fontSize: "0.85rem",
                   fontFamily: pasteMode === "code" ? "monospace" : "inherit",
                   resize: "none", outline: "none",
                   transition: "all 0.2s",
