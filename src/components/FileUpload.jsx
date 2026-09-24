@@ -32,7 +32,7 @@ function getFileIcon(name) {
  *  - fileContext             current file context { fileName, extractedText, summary, ... }
  *  - voiceSpeak(text)        function to speak text via TTS
  */
-export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, voiceSpeak, addMessage }) {
+export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, voiceSpeak, addMessage, buttonStyle }) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
@@ -175,19 +175,31 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
   return (
     <>
       {/* Upload trigger button */}
-      <motion.button
-        whileHover={{ scale: 1.08, background: "rgba(0,0,0,0.05)" }}
-        whileTap={{ scale: 0.95 }}
+      <button
+        type="button"
         onClick={() => inputRef.current?.click()}
         disabled={uploading}
         style={{
-          width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-          background: uploading ? "rgba(100,140,255,0.15)" : "rgba(0,0,0,0.03)",
-          border: "1px solid rgba(0,0,0,0.05)",
-          display: "flex", alignItems: "center", justifyContent: "center",
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          flexShrink: 0,
+          background: uploading ? "rgba(100,140,255,0.15)" : "rgba(106,140,255,0.08)",
+          border: "1px solid rgba(106,140,255,0.15)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           cursor: uploading ? "wait" : "pointer",
           color: "#6a8cff",
           transition: "all 0.2s",
+          boxSizing: "border-box",
+          ...buttonStyle,
+        }}
+        onMouseEnter={(e) => {
+          if (!uploading) e.currentTarget.style.background = "rgba(106,140,255,0.15)";
+        }}
+        onMouseLeave={(e) => {
+          if (!uploading) e.currentTarget.style.background = buttonStyle?.background || (uploading ? "rgba(100,140,255,0.15)" : "rgba(106,140,255,0.08)");
         }}
         title="Upload a file (PDF, Image, Text)"
       >
@@ -196,12 +208,12 @@ export default function FileUpload({ onFileAnalyzed, onClearFile, fileContext, v
             animate={{ rotate: 360 }}
             transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
           >
-            <Loader2 size={16} />
+            <Loader2 size={14} />
           </motion.div>
         ) : (
-          <Paperclip size={16} />
+          <Paperclip size={14} />
         )}
-      </motion.button>
+      </button>
 
       {/* Hidden file input */}
       <input

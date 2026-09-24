@@ -11,24 +11,24 @@ import { useToast } from "../components/Toast";
 const SECTIONS = [
   {
     id: "how",
-    icon: <Mic size={16} />,
-    color: { accent: "#0ea5e9", bg: "rgba(14,165,233,0.03)", border: "rgba(14,165,233,0.15)" },
+    icon: <Mic size={15} />,
     title: "How to use AIRA",
     items: [
       { tag: "Speak Naturally", text: "Zero typing needed — talk freely just like you would to an engineering peer." },
       { tag: "Instant Interruption", text: "Speak up anytime (barge-in); AIRA cuts off immediately and listens." },
-      { tag: "Execute Real Actions", text: "Search your Gmail, draft replies, inspect code, or practice mock interviews." },
+      { tag: "Execute Real Actions", text: "Search your Gmail, draft & send emails, inspect code, research the web, or practice mock interviews." },
       { tag: "Interactive VoiceOrb", text: "Tap the dynamic orb anytime to start speaking, pause, or wake AIRA up." },
+      { tag: "Toggle Web Search", text: "Enable Web Search mode to let AIRA research live web sources and cite them in responses." },
     ],
   },
   {
     id: "do",
-    icon: <Lightbulb size={16} />,
-    color: { accent: "#6366f1", bg: "rgba(99,102,241,0.03)", border: "rgba(99,102,241,0.15)" },
+    icon: <Lightbulb size={15} />,
     title: "What you can do with AIRA",
     items: [
-      { tag: "Voice Brainstorming", text: "Debate technical concepts, explore architecture, and think out loud in real time." },
-      { tag: "Full Gmail Assistant", text: "Search your inbox, summarize email threads, draft replies, and send on command." },
+      { tag: "Web Research", text: "Toggle Web Search to get real-time answers sourced from the live internet with clickable citations." },
+      { tag: "Email Drafting", text: "Say 'Draft an email to…' and AIRA opens a dedicated email composer right inside the chat panel." },
+      { tag: "Full Gmail Assistant", text: "Search your inbox, summarize email threads, draft replies, and send — all hands-free." },
       { tag: "File & Code Review", text: "Drop in source code, notes, or PDFs for instant line-by-line debugging and analysis." },
       { tag: "Live Mock Interviews", text: "Practice real-world technical and HR interviews with comprehensive scoring reports." },
       { tag: "Contextual Memory", text: "Remembers your preferences, background, and previous conversation context naturally." },
@@ -36,253 +36,193 @@ const SECTIONS = [
   },
 ];
 
-function SectionBlock({ sec, si }) {
+function SectionBlock({ sec }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.06 + si * 0.06, duration: 0.3 }}
-      style={{
-        borderRadius: 16,
-        border: `1px solid ${sec.color.border}`,
-        background: sec.color.bg,
-        overflow: "hidden",
-        boxShadow: "0 2px 12px rgba(0,0,0,0.02)",
-      }}
-    >
+    <div>
       <div style={{
-        display: "flex", alignItems: "center", gap: 10,
-        padding: "12px 18px 10px",
-        borderBottom: `1px solid ${sec.color.border}`,
-        background: "rgba(255,255,255,0.7)",
+        display: "flex", alignItems: "center", gap: 8,
+        marginBottom: 14,
       }}>
         <div style={{
-          width: 28, height: 28, borderRadius: 8, flexShrink: 0,
-          background: "white", border: `1px solid ${sec.color.border}`,
+          color: "#2563eb",
           display: "flex", alignItems: "center", justifyContent: "center",
-          color: sec.color.accent,
-          boxShadow: "0 2px 6px rgba(0,0,0,0.03)",
-        }}>{sec.icon}</div>
-        <span style={{ fontSize: "0.72rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: sec.color.accent }}>
+        }}>
+          {sec.icon}
+        </div>
+        <span style={{
+          fontSize: "0.74rem",
+          fontWeight: 700,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "#475569",
+        }}>
           {sec.title}
         </span>
       </div>
-      <div style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: 11 }}>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 11, paddingLeft: 2 }}>
         {sec.items.map((item, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
-            <div style={{
-              width: 6, height: 6, borderRadius: "50%",
-              background: sec.color.accent,
-              flexShrink: 0, marginTop: 7,
-              boxShadow: `0 0 6px ${sec.color.accent}`,
+          <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span style={{
+              width: 4, height: 4, borderRadius: "50%",
+              background: "#94a3b8",
+              flexShrink: 0,
+              transform: "translateY(-2px)",
             }} />
-            <div style={{ fontSize: "0.82rem", lineHeight: 1.55, color: "#334155" }}>
-              <strong style={{ color: "#0f172a", fontWeight: 700 }}>{item.tag}: </strong>
+            <div style={{ fontSize: "0.82rem", lineHeight: 1.55, color: "#475569" }}>
+              <strong style={{ color: "#0f172a", fontWeight: 600 }}>{item.tag}: </strong>
               <span>{item.text}</span>
             </div>
           </div>
         ))}
       </div>
-    </motion.div>
+    </div>
   );
 }
 
-function ComparisonBlock({ forceExpanded = false }) {
-  const [expanded, setExpanded] = useState(forceExpanded);
-
+function ComparisonBlock() {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.12, duration: 0.3 }}
-      style={{
-        borderRadius: 16,
-        border: "1px solid rgba(99,102,241,0.18)",
-        background: "rgba(255,255,255,0.75)",
-        overflow: "hidden",
-        boxShadow: "0 4px 20px rgba(99,102,241,0.04)",
-      }}
-    >
-      {/* Header */}
-      <div
-        onClick={() => setExpanded(!expanded)}
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "13px 18px", cursor: "pointer",
-          borderBottom: expanded ? "1px solid rgba(99,102,241,0.1)" : "none",
-          background: "rgba(255,255,255,0.7)",
-          transition: "background 0.2s",
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.04)"}
-        onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.7)"}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 30, height: 30, borderRadius: 9, flexShrink: 0,
-            background: "white", border: "1px solid rgba(99,102,241,0.25)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#6366f1",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.03)",
-          }}><Brain size={16} /></div>
-          <div>
-            <span style={{ fontSize: "0.74rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6366f1" }}>
-              Why AIRA Feels Different
-            </span>
-            <div style={{ fontSize: "0.70rem", color: "#64748b", fontWeight: 500, marginTop: 1 }}>
-              The contrast between typing into chatbots and talking with AIRA
-            </div>
-          </div>
+    <div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#0f172a", letterSpacing: "-0.01em" }}>
+          Why AIRA Feels Different
         </div>
-        <motion.div animate={{ rotate: expanded ? 180 : 0 }} style={{ color: "#6366f1" }}>
-          <ChevronDown size={16} />
-        </motion.div>
+        <div style={{ fontSize: "0.76rem", color: "#64748b", marginTop: 2 }}>
+          The contrast between typing into chatbots and talking with AIRA
+        </div>
       </div>
 
-      {/* Content */}
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.35, ease: "easeInOut" }}
-            style={{ overflow: "hidden" }}
-          >
-            <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, width: "100%" }}>
-                {/* Normal AI Column */}
-                <div style={{
-                  background: "rgba(241,245,249,0.7)", border: "1px solid rgba(203,213,225,0.6)",
-                  borderRadius: 12, padding: "14px 15px",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <span style={{ fontSize: "0.66rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                      Everyday Chatbots
-                    </span>
-                    <span style={{ fontSize: "0.62rem", color: "#64748b", fontWeight: 700, background: "rgba(203,213,225,0.5)", padding: "2px 8px", borderRadius: 99 }}>
-                      Text Box
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {[
-                      { tag: "Typing Required", text: "Locked into static chat boxes and endless typing" },
-                      { tag: "Scripted Filler", text: "Robotic disclaimers and repetitive boilerplate" },
-                      { tag: "No Barge-in", text: "Cannot interrupt speech or ongoing generation" },
-                      { tag: "Isolated Box", text: "Zero integration with your actual Gmail or tools" },
-                      { tag: "Generic Tone", text: "Surface-level answers lacking technical depth" },
-                    ].map((item, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                        <div style={{ color: "#94a3b8", marginTop: 3, flexShrink: 0 }}><X size={12} strokeWidth={3} /></div>
-                        <span style={{ fontSize: "0.78rem", color: "#64748b", lineHeight: 1.45 }}>
-                          <strong style={{ color: "#475569" }}>{item.tag}:</strong> {item.text}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+        gap: 12,
+        width: "100%",
+      }}>
+        {/* Normal AI Column */}
+        <div style={{
+          background: "#f8fafc",
+          border: "1px solid #e2e8f0",
+          borderRadius: 12,
+          padding: "14px 15px",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ fontSize: "0.74rem", fontWeight: 700, color: "#475569" }}>
+              Everyday Chatbots
+            </span>
+            <span style={{ fontSize: "0.64rem", color: "#64748b", fontWeight: 500, background: "#f1f5f9", border: "1px solid #e2e8f0", padding: "2px 7px", borderRadius: 6 }}>
+              Text Box
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+            {[
+              { tag: "Typing Required", text: "Locked into static chat boxes and endless typing" },
+              { tag: "Scripted Filler", text: "Robotic disclaimers and repetitive boilerplate" },
+              { tag: "No Barge-in", text: "Cannot interrupt speech or ongoing generation" },
+              { tag: "Isolated Box", text: "Zero integration with your actual Gmail or tools" },
+              { tag: "Generic Tone", text: "Surface-level answers lacking technical depth" },
+            ].map((item, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ color: "#94a3b8", marginTop: 3, flexShrink: 0 }}>
+                  <X size={12} strokeWidth={2.5} />
                 </div>
+                <span style={{ fontSize: "0.78rem", color: "#64748b", lineHeight: 1.45 }}>
+                  <strong style={{ color: "#475569", fontWeight: 600 }}>{item.tag}:</strong> {item.text}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
 
-                {/* AIRA Column */}
-                <div style={{
-                  background: "linear-gradient(145deg, rgba(99,102,241,0.06), rgba(139,92,246,0.06))",
-                  border: "1px solid rgba(99,102,241,0.22)",
-                  borderRadius: 12, padding: "14px 15px",
-                  boxShadow: "0 4px 16px rgba(99,102,241,0.06)",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <span style={{ fontSize: "0.66rem", fontWeight: 800, color: "#4f46e5", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                      AIRA Voice Agent
-                    </span>
-                    <span style={{ fontSize: "0.62rem", color: "#4f46e5", fontWeight: 700, background: "rgba(99,102,241,0.12)", padding: "2px 8px", borderRadius: 99 }}>
-                      Voice & Actions
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {[
-                      { tag: "Voice-First", text: "Natural spoken dialogue that feels like an engineering peer" },
-                      { tag: "Instant Barge-in", text: "Interrupt mid-sentence anytime; AIRA cuts off immediately" },
-                      { tag: "Gmail Assistant", text: "Search your inbox, summarize threads, and draft replies" },
-                      { tag: "Code & Doc Review", text: "Inspect source files and documents with line-by-line feedback" },
-                      { tag: "Mock Interviews", text: "Roleplay realistic technical & HR scenarios with reports" },
-                    ].map((item, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                        <div style={{ color: "#6366f1", marginTop: 3, flexShrink: 0 }}>
-                          <Check size={12} strokeWidth={3.5} />
-                        </div>
-                        <span style={{ fontSize: "0.78rem", color: "#0f172a", lineHeight: 1.45 }}>
-                          <strong style={{ color: "#4338ca" }}>{item.tag}:</strong> {item.text}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+        {/* AIRA Column */}
+        <div style={{
+          background: "#ffffff",
+          border: "1px solid #cbd5e1",
+          borderRadius: 12,
+          padding: "14px 15px",
+          boxShadow: "0 1px 4px rgba(15, 23, 42, 0.04)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ fontSize: "0.74rem", fontWeight: 700, color: "#0f172a" }}>
+              AIRA Assistant
+            </span>
+            <span style={{ fontSize: "0.64rem", color: "#2563eb", fontWeight: 600, background: "#eff6ff", border: "1px solid #dbeafe", padding: "2px 7px", borderRadius: 6 }}>
+              Voice & Web & Actions
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+            {[
+              { tag: "Voice-First", text: "Natural spoken dialogue that feels like an engineering peer" },
+              { tag: "Instant Barge-in", text: "Interrupt mid-sentence anytime; AIRA cuts off immediately" },
+              { tag: "Web Research", text: "Toggle live web search to get real-time sourced answers with citations" },
+              { tag: "Email Composer", text: "Dedicated in-chat email drafting UI with To, Subject, and rich body" },
+              { tag: "Gmail Assistant", text: "Search your inbox, summarize threads, draft & send replies" },
+              { tag: "Code & Doc Review", text: "Inspect source files and documents with line-by-line feedback" },
+              { tag: "Rich Responses", text: "Polished markdown rendering with code blocks, tables, and lists" },
+            ].map((item, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ color: "#2563eb", marginTop: 3, flexShrink: 0 }}>
+                  <Check size={12} strokeWidth={3} />
                 </div>
+                <span style={{ fontSize: "0.78rem", color: "#334155", lineHeight: 1.45 }}>
+                  <strong style={{ color: "#0f172a", fontWeight: 600 }}>{item.tag}:</strong> {item.text}
+                </span>
               </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
-              {/* Takeaway */}
-              <div style={{
-                padding: "11px 14px", borderRadius: 10,
-                background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.12)"
-              }}>
-                <p style={{ margin: 0, fontSize: "0.78rem", color: "#334155", lineHeight: 1.55 }}>
-                  <strong style={{ color: "#4f46e5" }}>The Takeaway: </strong>
-                  AIRA isn't a text box wrapped in a voice widget — it is a voice-native copilot that acts as a real-world partner while you work.
-                </p>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
+      {/* Takeaway */}
+      <div style={{
+        marginTop: 12,
+        padding: "11px 14px",
+        borderRadius: 8,
+        background: "#f8fafc",
+        border: "1px solid #e2e8f0",
+      }}>
+        <p style={{ margin: 0, fontSize: "0.78rem", color: "#475569", lineHeight: 1.55 }}>
+          <strong style={{ color: "#0f172a", fontWeight: 600 }}>The Takeaway: </strong>
+          AIRA isn't a text box wrapped in a voice widget — it is a voice-native copilot that researches the web, drafts emails, and acts as a real-world engineering partner.
+        </p>
+      </div>
+    </div>
   );
 }
 
 function AgenticComparisonBlock() {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.12, duration: 0.3 }}
-      style={{
-        borderRadius: 16,
-        border: "1px solid rgba(14,165,233,0.18)",
-        background: "rgba(255,255,255,0.75)",
-        overflow: "hidden",
-        padding: "16px 18px",
-        boxShadow: "0 4px 20px rgba(14,165,233,0.04)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <div style={{
-          width: 30, height: 30, borderRadius: 9, flexShrink: 0,
-          background: "white", border: "1px solid rgba(14,165,233,0.25)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          color: "#0ea5e9",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.03)",
-        }}><Brain size={16} /></div>
-        <div>
-          <span style={{ fontSize: "0.74rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#0ea5e9" }}>
-            AI vs Agentic AI
-          </span>
-          <div style={{ fontSize: "0.70rem", color: "#64748b", fontWeight: 500, marginTop: 1 }}>
-            Why AIRA goes far beyond standard Q&A chatbots
-          </div>
+    <div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#0f172a", letterSpacing: "-0.01em" }}>
+          AI vs Agentic AI
+        </div>
+        <div style={{ fontSize: "0.76rem", color: "#64748b", marginTop: 2 }}>
+          Why AIRA goes far beyond standard Q&A chatbots
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, width: "100%" }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+        gap: 12,
+        width: "100%",
+      }}>
         {/* Normal AI Column */}
         <div style={{
-          background: "rgba(241,245,249,0.7)", border: "1px solid rgba(203,213,225,0.6)",
-          borderRadius: 12, padding: "14px 15px",
+          background: "#f8fafc",
+          border: "1px solid #e2e8f0",
+          borderRadius: 12,
+          padding: "14px 15px",
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: "0.66rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            <span style={{ fontSize: "0.74rem", fontWeight: 700, color: "#475569" }}>
               Standard AI
             </span>
-            <span style={{ fontSize: "0.62rem", color: "#64748b", fontWeight: 700, background: "rgba(203,213,225,0.5)", padding: "2px 8px", borderRadius: 99 }}>
+            <span style={{ fontSize: "0.64rem", color: "#64748b", fontWeight: 500, background: "#f1f5f9", border: "1px solid #e2e8f0", padding: "2px 7px", borderRadius: 6 }}>
               Passive
             </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
             {[
               { tag: "Passive", text: "Waits for explicit instructions every turn" },
               { tag: "Text-bound", text: "Cannot trigger outside tools or services" },
@@ -290,9 +230,11 @@ function AgenticComparisonBlock() {
               { tag: "Stateless", text: "Forgets goals and context between sessions" },
             ].map((item, i) => (
               <div key={"norm" + i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                <div style={{ color: "#94a3b8", marginTop: 3, flexShrink: 0 }}><X size={12} strokeWidth={3} /></div>
+                <div style={{ color: "#94a3b8", marginTop: 3, flexShrink: 0 }}>
+                  <X size={12} strokeWidth={2.5} />
+                </div>
                 <span style={{ fontSize: "0.78rem", color: "#64748b", lineHeight: 1.45 }}>
-                  <strong style={{ color: "#475569" }}>{item.tag}:</strong> {item.text}
+                  <strong style={{ color: "#475569", fontWeight: 600 }}>{item.tag}:</strong> {item.text}
                 </span>
               </div>
             ))}
@@ -301,30 +243,34 @@ function AgenticComparisonBlock() {
 
         {/* Agentic AI Column */}
         <div style={{
-          background: "linear-gradient(145deg, rgba(14,165,233,0.06), rgba(99,102,241,0.06))",
-          border: "1px solid rgba(14,165,233,0.22)",
-          borderRadius: 12, padding: "14px 15px",
-          boxShadow: "0 4px 16px rgba(14,165,233,0.06)",
+          background: "#ffffff",
+          border: "1px solid #cbd5e1",
+          borderRadius: 12,
+          padding: "14px 15px",
+          boxShadow: "0 1px 4px rgba(15, 23, 42, 0.04)",
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: "0.66rem", fontWeight: 800, color: "#0284c7", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            <span style={{ fontSize: "0.74rem", fontWeight: 700, color: "#0f172a" }}>
               AIRA (Agentic)
             </span>
-            <span style={{ fontSize: "0.62rem", color: "#0284c7", fontWeight: 700, background: "rgba(14,165,233,0.12)", padding: "2px 8px", borderRadius: 99 }}>
+            <span style={{ fontSize: "0.64rem", color: "#2563eb", fontWeight: 600, background: "#eff6ff", border: "1px solid #dbeafe", padding: "2px 7px", borderRadius: 6 }}>
               Action-Ready
             </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
             {[
               { tag: "Goal-Driven", text: "Plans ahead and takes initiative to solve tasks" },
-              { tag: "Real Actions", text: "Searches Gmail, drafts emails & analyzes code" },
+              { tag: "Real Actions", text: "Searches Gmail, drafts emails, researches the web & analyzes code" },
               { tag: "Voice-Native", text: "Instant speech barge-in & continuous dialogue" },
+              { tag: "Web Research", text: "Fetches live web sources and provides cited, verifiable answers" },
               { tag: "Persistent", text: "Retains context, personal preferences & memory" },
             ].map((item, i) => (
               <div key={"agent" + i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                <div style={{ color: "#0ea5e9", marginTop: 3, flexShrink: 0 }}><Check size={12} strokeWidth={3.5} /></div>
-                <span style={{ fontSize: "0.78rem", color: "#0f172a", lineHeight: 1.45 }}>
-                  <strong style={{ color: "#0284c7" }}>{item.tag}:</strong> {item.text}
+                <div style={{ color: "#2563eb", marginTop: 3, flexShrink: 0 }}>
+                  <Check size={12} strokeWidth={3} />
+                </div>
+                <span style={{ fontSize: "0.78rem", color: "#334155", lineHeight: 1.45 }}>
+                  <strong style={{ color: "#0f172a", fontWeight: 600 }}>{item.tag}:</strong> {item.text}
                 </span>
               </div>
             ))}
@@ -332,16 +278,20 @@ function AgenticComparisonBlock() {
         </div>
       </div>
 
+      {/* Takeaway */}
       <div style={{
-        marginTop: 14, padding: "11px 14px", borderRadius: 10,
-        background: "rgba(14,165,233,0.05)", border: "1px solid rgba(14,165,233,0.12)"
+        marginTop: 12,
+        padding: "11px 14px",
+        borderRadius: 8,
+        background: "#f8fafc",
+        border: "1px solid #e2e8f0",
       }}>
-        <p style={{ margin: 0, fontSize: "0.78rem", color: "#334155", lineHeight: 1.55 }}>
-          <strong style={{ color: "#0284c7" }}>The Takeaway: </strong>
-          AIRA doesn't just produce text — it listens, understands your objectives, and executes real workflows alongside you like an engineering partner.
+        <p style={{ margin: 0, fontSize: "0.78rem", color: "#475569", lineHeight: 1.55 }}>
+          <strong style={{ color: "#0f172a", fontWeight: 600 }}>The Takeaway: </strong>
+          AIRA doesn't just produce text — it listens, researches live web sources, drafts emails, understands your objectives, and executes real workflows alongside you like an engineering partner.
         </p>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -353,7 +303,7 @@ function AboutModal({ onClose, modalType }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
+      transition={{ duration: 0.18 }}
       onClick={onClose}
       style={{
         position: "fixed", inset: 0, zIndex: 100,
@@ -365,108 +315,99 @@ function AboutModal({ onClose, modalType }) {
       }}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.94, y: 18 }}
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
-        transition={{ type: "spring", bounce: 0.2, duration: 0.48 }}
+        transition={{ duration: 0.22, ease: "easeOut" }}
         onClick={(e) => e.stopPropagation()}
         style={{
           position: "relative", width: "100%", maxWidth: 620,
           maxHeight: "88vh", overflowY: "auto",
-          borderRadius: 24,
-          background: "rgba(255, 255, 255, 0.94)",
-          border: "1px solid rgba(255, 255, 255, 0.9)",
-          boxShadow: "0 25px 70px -10px rgba(15, 23, 42, 0.2), 0 0 0 1px rgba(15, 23, 42, 0.05)",
-          backdropFilter: "blur(20px)",
-          WebkitBackdropFilter: "blur(20px)",
+          borderRadius: 20,
+          background: "#ffffff",
+          border: "1px solid #e2e8f0",
+          boxShadow: "0 20px 45px -12px rgba(15, 23, 42, 0.15), 0 0 0 1px rgba(15, 23, 42, 0.04)",
           fontFamily: "'Inter', system-ui, sans-serif",
         }}
       >
-        <div style={{ padding: "28px 26px 24px" }}>
+        <div style={{ padding: "28px 28px 24px" }}>
           {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{
-                width: 42, height: 42, borderRadius: 12,
-                background: isWhat ? "linear-gradient(135deg,#6366f1,#0ea5e9)" : "linear-gradient(135deg,#0ea5e9,#3b82f6)",
-                boxShadow: isWhat ? "0 8px 20px rgba(99,102,241,0.25)" : "0 8px 20px rgba(14,165,233,0.25)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                {isWhat ? <Brain size={20} color="white" /> : <Sparkles size={20} color="white" />}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
+            <div>
+              <div style={{ fontSize: "1.15rem", fontWeight: 700, color: "#0f172a", letterSpacing: "-0.02em" }}>
+                {isWhat ? "What is AIRA?" : "How AIRA is different"}
               </div>
-              <div>
-                <div style={{ fontSize: "1.05rem", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.01em" }}>
-                  {isWhat ? "What is AIRA?" : "How AIRA is different"}
+              {isWhat ? (
+                <div style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 500, letterSpacing: "0.04em", textTransform: "uppercase", marginTop: 3 }}>
+                  AIRA • Advanced Intelligent Responsive Assistant
                 </div>
-                {isWhat ? (
-                  <div style={{ fontSize: "0.58rem", color: "#6366f1", fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase", marginTop: 2 }}>
-                    Advanced Intelligent Responsive Assistant
-                  </div>
-                ) : (
-                  <div style={{ fontSize: "0.58rem", color: "#0ea5e9", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 2 }}>
-                    Voice-First • Agentic Actions • Interruption-Aware
-                  </div>
-                )}
-              </div>
+              ) : (
+                <div style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 500, letterSpacing: "0.04em", textTransform: "uppercase", marginTop: 3 }}>
+                  Voice-First • Web Research • Email Drafting • Agentic Actions
+                </div>
+              )}
             </div>
+
             <button
               onClick={onClose}
               style={{
-                width: 34, height: 34, borderRadius: 10, flexShrink: 0,
-                background: "rgba(0,0,0,0.04)", border: "1px solid rgba(0,0,0,0.06)",
+                width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+                background: "#f8fafc", border: "1px solid #e2e8f0",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                cursor: "pointer", color: "#64748b", transition: "all 0.2s",
+                cursor: "pointer", color: "#64748b", transition: "all 0.15s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "#ef4444"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "#64748b"; e.currentTarget.style.background = "rgba(0,0,0,0.04)"; }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "#0f172a"; e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "#64748b"; e.currentTarget.style.background = "#f8fafc"; }}
               aria-label="Close modal"
             ><X size={15} /></button>
           </div>
 
-          {/* Hero Lead Cards */}
+          {/* Hero Lead Note */}
           {isWhat ? (
             <div style={{
-              padding: "14px 16px", borderRadius: 14, marginBottom: 18,
-              background: "linear-gradient(135deg, rgba(99,102,241,0.06), rgba(14,165,233,0.04))",
-              border: "1px solid rgba(99,102,241,0.12)",
-              display: "flex", flexDirection: "column", gap: 5,
+              padding: "13px 16px", borderRadius: 10, marginBottom: 20,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              display: "flex", flexDirection: "column", gap: 4,
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#4f46e5", fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                <Sparkles size={13} />
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#2563eb", fontSize: "0.68rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <Sparkles size={12} />
                 <span>Next-Gen Voice Intelligence</span>
               </div>
-              <p style={{ margin: 0, fontSize: "0.84rem", color: "#334155", lineHeight: 1.55 }}>
-                AIRA is an <strong style={{ color: "#0f172a", fontWeight: 700 }}>Agentic Voice Assistant</strong> designed for spontaneous spoken dialogue, direct action execution, and real-time workflows — from managing Gmail to deep code review.
+              <p style={{ margin: 0, fontSize: "0.83rem", color: "#334155", lineHeight: 1.55 }}>
+                AIRA — <strong style={{ color: "#0f172a", fontWeight: 600 }}>Advanced Intelligent Responsive Assistant</strong> — is an agentic voice-first AI designed for spontaneous spoken dialogue, live web research, email drafting, direct action execution, and real-time workflows.
               </p>
             </div>
           ) : (
             <div style={{
-              padding: "14px 16px", borderRadius: 14, marginBottom: 18,
-              background: "linear-gradient(135deg, rgba(14,165,233,0.06), rgba(99,102,241,0.04))",
-              border: "1px solid rgba(14,165,233,0.14)",
-              display: "flex", flexDirection: "column", gap: 5,
+              padding: "13px 16px", borderRadius: 10, marginBottom: 20,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              display: "flex", flexDirection: "column", gap: 4,
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#0284c7", fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                <Zap size={13} />
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#2563eb", fontSize: "0.68rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <Zap size={12} />
                 <span>Beyond Standard Chatbots</span>
               </div>
-              <p style={{ margin: 0, fontSize: "0.84rem", color: "#334155", lineHeight: 1.55 }}>
-                Traditional chatbots wait for typed prompts and output text. AIRA operates as a <strong style={{ color: "#0f172a", fontWeight: 700 }}>proactive spoken companion</strong> with natural barge-in interruption, active memory, and hands-free tool execution.
+              <p style={{ margin: 0, fontSize: "0.83rem", color: "#334155", lineHeight: 1.55 }}>
+                Traditional chatbots wait for typed prompts and output text. AIRA operates as a <strong style={{ color: "#0f172a", fontWeight: 600 }}>proactive spoken companion</strong> with natural barge-in interruption, live web research, in-chat email drafting, active memory, and hands-free tool execution.
               </p>
             </div>
           )}
 
           {/* Sections Content */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {isWhat ? (
               <>
-                <SectionBlock sec={SECTIONS[1]} si={0} />
+                <SectionBlock sec={SECTIONS[1]} />
+                <div style={{ height: 1, background: "#f1f5f9" }} />
                 <AgenticComparisonBlock />
               </>
             ) : (
               <>
-                <SectionBlock sec={SECTIONS[0]} si={0} />
-                <ComparisonBlock forceExpanded={true} />
+                <SectionBlock sec={SECTIONS[0]} />
+                <div style={{ height: 1, background: "#f1f5f9" }} />
+                <ComparisonBlock />
               </>
             )}
           </div>
@@ -475,19 +416,19 @@ function AboutModal({ onClose, modalType }) {
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             marginTop: 22, paddingTop: 16,
-            borderTop: "1px solid rgba(0,0,0,0.06)",
+            borderTop: "1px solid #f1f5f9",
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <User2 size={13} color="#94a3b8" />
               <span style={{ fontSize: "0.74rem", color: "#64748b" }}>
                 Built by{" "}
-                <a href="mailto:hshrivastava23032007@gmail.com" style={{ color: "#6366f1", fontWeight: 600, textDecoration: "none" }}>
+                <a href="mailto:hshrivastava23032007@gmail.com" style={{ color: "#2563eb", fontWeight: 500, textDecoration: "none" }}>
                   Harsh Shrivastava
                 </a>
               </span>
             </div>
-            <span style={{ fontSize: "0.68rem", color: "#94a3b8", fontWeight: 600, letterSpacing: "0.04em" }}>
-              AIRA v2.0 • Voice Agent
+            <span style={{ fontSize: "0.68rem", color: "#94a3b8", fontWeight: 500, letterSpacing: "0.02em" }}>
+              AIRA v2.0 • Advanced Intelligent Responsive Assistant
             </span>
           </div>
         </div>
@@ -699,7 +640,7 @@ export default function Login() {
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-          style={{ width: "100%", maxWidth: 380, margin: "0 32px" }}
+          style={{ width: "100%", maxWidth: 360, margin: "0 28px" }}
         >
           <motion.div
             style={{
@@ -708,48 +649,57 @@ export default function Login() {
               backdropFilter: "blur(40px) saturate(150%)",
               WebkitBackdropFilter: "blur(40px) saturate(150%)",
               border: "1px solid rgba(255, 255, 255, 0.8)",
-              borderRadius: 32,
-              boxShadow: "0 24px 48px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,1), inset 0 0 20px rgba(255,255,255,0.4)",
-              padding: "56px 48px",
+              borderRadius: 28,
+              boxShadow: "none",
+              padding: "48px 38px 42px",
               display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
             }}
           >
-            {/* Premium Logo Header */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 40 }}>
-              <div style={{
-                width: 44, height: 44, borderRadius: 14,
-                background: "linear-gradient(135deg, #6366f1, #0ea5e9)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                boxShadow: "0 8px 16px rgba(99,102,241,0.25)"
-              }}>
-                <Sparkles size={22} color="white" />
-              </div>
+            {/* Brand Header */}
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center",
+              textAlign: "center", marginBottom: 32, width: "100%",
+            }}>
               <h2 style={{
                 fontSize: "2.4rem", fontWeight: 800, color: "#0f172a",
-                margin: 0, letterSpacing: "-0.03em"
-              }}>AIRA</h2>
+                margin: 0, letterSpacing: "-0.02em", lineHeight: 1.1,
+              }}>
+                AIRA
+              </h2>
+              <div style={{
+                fontSize: "0.60rem",
+                fontWeight: 600,
+                color: "#64748b",
+                letterSpacing: "0.13em",
+                textTransform: "uppercase",
+                marginTop: 7,
+                lineHeight: 1.4,
+                maxWidth: "100%",
+              }}>
+                ADVANCED INTELLIGENT RESPONSIVE ASSISTANT
+              </div>
             </div>
 
             {/* ── Google button ── */}
             <motion.button
-              whileHover={{ scale: 1.02, boxShadow: "0 12px 24px rgba(0,0,0,0.06), 0 0 0 1px rgba(99,102,241,0.1)" }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ scale: 1.015, boxShadow: "0 10px 20px rgba(0,0,0,0.06), 0 0 0 1px rgba(99,102,241,0.1)" }}
+              whileTap={{ scale: 0.985 }}
               onClick={handleGoogleLogin}
               disabled={loading}
               style={{
                 width: "100%",
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
-                padding: "16px 24px",
-                borderRadius: 16,
-                fontSize: "1rem", fontWeight: 600,
+                padding: "15px 22px",
+                borderRadius: 14,
+                fontSize: "0.98rem", fontWeight: 600,
                 color: "#1e293b",
                 background: "#ffffff",
                 boxShadow: "0 4px 12px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,1)",
-                border: "1px solid rgba(226,232,240,0.8)",
+                border: "1px solid rgba(226,232,240,0.85)",
                 cursor: loading ? "default" : "pointer",
                 opacity: loading ? 0.7 : 1,
                 transition: "all 0.2s ease",
-                marginBottom: 32,
+                marginBottom: 22,
                 position: "relative",
                 overflow: "hidden",
               }}
@@ -776,40 +726,40 @@ export default function Login() {
             </motion.button>
 
             {/* ── Refined Minimal Links ── */}
-            <div style={{ display: "flex", gap: 16, width: "100%", justifyContent: "center", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 12, width: "100%", justifyContent: "center", alignItems: "center" }}>
               <motion.button
-                whileHover={{ color: "#4f46e5", background: "rgba(99,102,241,0.06)" }}
-                whileTap={{ scale: 0.96 }}
+                whileHover={{ color: "#0f172a" }}
+                whileTap={{ scale: 0.97 }}
                 onClick={() => setModalOpen("what")}
                 style={{
-                  padding: "8px 16px",
-                  borderRadius: 20,
-                  fontSize: "0.82rem", fontWeight: 600,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  fontSize: "0.80rem", fontWeight: 500,
                   color: "#64748b",
                   background: "transparent",
                   border: "none",
                   cursor: "pointer",
-                  transition: "all 0.2s ease",
+                  transition: "color 0.15s ease",
                 }}
               >
                 What is AIRA?
               </motion.button>
 
-              <div style={{ width: 1, height: 16, background: "rgba(203,213,225,0.6)" }} />
+              <div style={{ width: 1, height: 12, background: "rgba(203,213,225,0.7)" }} />
 
               <motion.button
-                whileHover={{ color: "#4f46e5", background: "rgba(99,102,241,0.06)" }}
-                whileTap={{ scale: 0.96 }}
+                whileHover={{ color: "#0f172a" }}
+                whileTap={{ scale: 0.97 }}
                 onClick={() => setModalOpen("diff")}
                 style={{
-                  padding: "8px 16px",
-                  borderRadius: 20,
-                  fontSize: "0.82rem", fontWeight: 600,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  fontSize: "0.80rem", fontWeight: 500,
                   color: "#64748b",
                   background: "transparent",
                   border: "none",
                   cursor: "pointer",
-                  transition: "all 0.2s ease",
+                  transition: "color 0.15s ease",
                 }}
               >
                 Why it's different

@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { LogOut, Cpu, BarChart2, MessageCircle, FileText, X, Trash2, Clipboard, Mail } from "lucide-react";
+import { LogOut, Cpu, BarChart2, MessageCircle, FileText, X, Trash2, Clipboard, Mail, Globe } from "lucide-react";
 import VoiceOrb from "../components/VoiceOrb";
 import TransientChatBox from "../components/TransientChatBox";
+import EmailDraftPanel from "../components/EmailDraftPanel";
 import MinimalEvaluationOverlay from "../components/MinimalEvaluationOverlay";
 import FileUpload from "../components/FileUpload";
 import { useVoice } from "../hooks/useVoice";
@@ -13,6 +14,7 @@ import { API_BASE } from "../config/api";
 import { classifyError, sanitizeLogDetails, ERROR_MESSAGES } from "../services/errorRecoveryService";
 import { useToast } from "../components/Toast";
 import { airaVoiceDebug } from "../services/voiceService";
+const voiceTrace = (event, data) => { if (import.meta.env.DEV) console.log("[VoiceTrace]", event, data); };
 const API = `${API_BASE}/api`;
 
 /**
@@ -164,11 +166,25 @@ export default function Agent({ user }) {
   const [history, setHistory] = useState([]);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [gmailStatus, setGmailStatus] = useState({ connected: false });
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const webSearchEnabledRef = useRef(false);
+  useEffect(() => {
+    webSearchEnabledRef.current = webSearchEnabled;
+  }, [webSearchEnabled]);
+
+  // Desktop Email Draft State
+  const [activeDraft, setActiveDraft] = useState(null);
+  const activeDraftRef = useRef(null);
+  useEffect(() => {
+    activeDraftRef.current = activeDraft;
+  }, [activeDraft]);
+  const userEditedFieldsRef = useRef({ to: false, subject: false, body: false });
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const profileRef = useRef(null);
   const { showToast } = useToast();
 
-  const addMessage = useCallback((role, text, emailDraft = null, type = "text") => {
-    setMessages((prev) => [...prev, { id: Date.now() + Math.random(), role, text, emailDraft, type }]);
+  const addMessage = useCallback((role, text, emailDraft = null, type = "text", sources = null) => {
+    setMessages((prev) => [...prev, { id: Date.now() + Math.random(), role, text, emailDraft, type, sources }]);
   }, []);
 
   useEffect(() => {
@@ -263,6 +279,8 @@ export default function Agent({ user }) {
   const openThread = async (id) => {
     setChatId(id);
     setShowHistory(false);
+    setActiveDraft(null);
+    userEditedFieldsRef.current = { to: false, subject: false, body: false };
     if (user?.uid) {
       fetchThreadSummary(user.uid, id).then((sum) => {
         threadSummaryRef.current = sum;
@@ -752,7 +770,29 @@ export default function Agent({ user }) {
 
     /* ── Frontend intercepts (never need the backend) ── */
 
-    // 0. Reset Session / Fresh Start
+    // 0. Cancel / Discard Active Email Draft
+    if (activeDraftRef.current) {
+      const isCancelDraft = /\b(cancel|discard this|discard draft|cancel draft|never mind|close draft)\b/i.test(cleanTranscript);
+      if (isCancelDraft) {
+        setActiveDraft(null);
+        userEditedFieldsRef.current = { to: false, subject: false, body: false };
+        showToast({
+          title: "Draft Cancelled",
+          message: "Email draft cancelled.",
+          type: "info",
+        });
+        const reply = "Email draft discarded. We're back to our conversation.";
+        addMessage("aira", reply);
+        messageHistoryRef.current.push({ role: "assistant", content: reply });
+        if (user?.uid && currentChatId) {
+          saveMessage(user.uid, currentChatId, "assistant", reply);
+        }
+        voice.speak(reply);
+        return;
+      }
+    }
+
+    // Reset Session / Fresh Start
     const tLower = transcript.toLowerCase();
     if (tLower.includes("start fresh") || tLower.includes("new chat") || tLower.includes("reset") || tLower.includes("clear memory")) {
       if (abortControllerRef.current) {
@@ -769,6 +809,8 @@ export default function Agent({ user }) {
       setMessages([]);
       messageHistoryRef.current = [];
       setFileContext(null);
+      setActiveDraft(null);
+      userEditedFieldsRef.current = { to: false, subject: false, body: false };
       const reply = "Done — clean slate. What do you want to work on?";
       addMessage("aira", reply);
       messageHistoryRef.current.push({ role: "assistant", content: reply });
@@ -850,6 +892,7 @@ export default function Agent({ user }) {
       }
 
       const tReqStart = performance.now();
+      voiceTrace("API_PROCESSING_START", { transcript: cleanTranscript.substring(0, 40) });
       airaVoiceDebug("19. API request started", {
         endpoint: `${API_BASE}/api/chat`,
         chatId: currentChatId || chatId,
@@ -865,7 +908,9 @@ export default function Agent({ user }) {
           memory: memoryTextRef.current || memoryText,
           userId: user?.uid,
           chatId: currentChatId || chatId,
-          conversationSummary: threadSummaryRef.current || null
+          conversationSummary: threadSummaryRef.current || null,
+          webSearch: webSearchEnabledRef.current,
+          activeDraft: activeDraftRef.current || null,
         }),
       });
 
@@ -887,6 +932,7 @@ export default function Agent({ user }) {
 
       const data = await resp.json();
       const tResp = performance.now();
+      voiceTrace("API_PROCESSING_END", { status: resp.status, replyLength: (data.reply || "").length });
       if (import.meta.env.DEV) {
         console.log(`[PERF] chat-request: ${(tResp - tReqStart).toFixed(0)}ms`);
       }
@@ -898,11 +944,60 @@ export default function Agent({ user }) {
 
       const reply = data.reply || "Hmm, say that again?";
 
+      // Handle Email Draft State / Actions
+      if (data.emailSent) {
+        setActiveDraft(null);
+        userEditedFieldsRef.current = { to: false, subject: false, body: false };
+        showToast({
+          title: "Email Sent",
+          message: "Email sent successfully.",
+          type: "success",
+        });
+      } else if (data.emailError) {
+        showToast({
+          title: "Send Failed",
+          message: "Couldn't send the email. Your draft is still here.",
+          type: "error",
+        });
+        if (data.emailDraft) {
+          setActiveDraft(data.emailDraft);
+          activeDraftRef.current = data.emailDraft;
+        }
+      } else if (data.emailDraft && (data.emailDraft.subject || data.emailDraft.body)) {
+        const isNewDraft = !activeDraftRef.current;
+        const current = activeDraftRef.current || {};
+        const edited = userEditedFieldsRef.current;
+
+        const tLower = cleanTranscript.toLowerCase();
+        const asksForSubject = /\b(subject|title)\b/i.test(tLower);
+        const asksForTo = /\b(to|recipient|send to|address)\b/i.test(tLower);
+        const asksForBody = isNewDraft || !edited.body || /\b(body|write|rewrite|shorter|longer|formal|casual|professional|saying|say|add|remove|change|tone)\b/i.test(tLower);
+
+        const mergedDraft = {
+          to: (!edited.to || asksForTo || isNewDraft) ? (data.emailDraft.to || current.to || "") : current.to,
+          subject: (!edited.subject || asksForSubject || isNewDraft) ? (data.emailDraft.subject || current.subject || "") : current.subject,
+          body: asksForBody ? (data.emailDraft.body || current.body || "") : current.body,
+          threadId: data.emailDraft.threadId || current.threadId || null,
+        };
+
+        if (isNewDraft) {
+          userEditedFieldsRef.current = { to: false, subject: false, body: false };
+          showToast({
+            title: "Draft Ready",
+            message: "Email draft ready.",
+            type: "info",
+          });
+        }
+
+        setActiveDraft(mergedDraft);
+        activeDraftRef.current = mergedDraft;
+      }
+
       messageHistoryRef.current.push({ role: "assistant", content: reply });
 
       // Auto-detect code blocks in AIRA's reply
       const hasCode = reply.includes("```") || (reply.includes("{") && reply.includes("}") && reply.includes(";"));
-      addMessage("aira", reply, data.emailDraft, hasCode ? "code" : "text");
+      addMessage("aira", reply, data.emailDraft, hasCode ? "code" : "text", data.sources);
 
       if (user?.uid && currentChatId) saveMessage(user.uid, currentChatId, "assistant", reply, hasCode ? "code" : "text", data.emailDraft);
 
@@ -920,12 +1015,7 @@ export default function Agent({ user }) {
         if (import.meta.env.DEV) {
           console.log(`[PERF] tts-start: ${(tTtsStart - tResp).toFixed(0)}ms | total-time-to-first-speech: ${(tTtsStart - tFinalize).toFixed(0)}ms`);
         }
-        voice.speak(reply, async () => {
-          if (data.intent === "end_session" || data.intent === "evaluate") {
-            const scenario = currentScenario || data.scenario || "General Practice";
-            await handleEvaluate(scenario);
-          }
-        });
+        voice.speak(reply);
       }
     } catch (err) {
       if (err.name === "AbortError") {
@@ -951,7 +1041,7 @@ export default function Agent({ user }) {
         voice.speak(errMsg);
       }
     }
-  }, [addMessage, handleEvaluate, extractMemoryIfNeeded, evaluation, memoryText, userName, user?.uid, currentScenario, chatId, fileContext, voice]);
+  }, [addMessage, handleEvaluate, extractMemoryIfNeeded, evaluation, memoryText, userName, user?.uid, currentScenario, chatId, fileContext, voice, showToast]);
 
   useEffect(() => {
     handleUserSpeakRef.current = handleUserSpeak;
@@ -960,6 +1050,41 @@ export default function Agent({ user }) {
   useEffect(() => {
     handleUserInterruptRef.current = handleUserInterrupt;
   }, [handleUserInterrupt]);
+
+  const handleCancelDraft = useCallback(() => {
+    setActiveDraft(null);
+    activeDraftRef.current = null;
+    userEditedFieldsRef.current = { to: false, subject: false, body: false };
+    showToast({
+      title: "Draft Cancelled",
+      message: "Email draft cancelled.",
+      type: "info",
+    });
+  }, [showToast]);
+
+  const handleSendDraft = useCallback(async (draftToSend) => {
+    const draft = draftToSend || activeDraftRef.current;
+    if (!draft) return;
+
+    const recipient = (draft.to || "").trim();
+    if (!recipient) {
+      showToast({
+        title: "Recipient Required",
+        message: "Please enter a recipient email address.",
+        type: "error",
+      });
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      activeDraftRef.current = draft;
+      setActiveDraft(draft);
+      await handleUserSpeak("Send it.");
+    } finally {
+      setIsSendingEmail(false);
+    }
+  }, [handleUserSpeak, showToast]);
 
   const splitText = (text, size = 4000) => {
     let chunks = [];
@@ -1134,6 +1259,7 @@ export default function Agent({ user }) {
         inset: 0,
         width: "100vw",
         height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -1204,7 +1330,7 @@ export default function Agent({ user }) {
           <div style={{ lineHeight: 1 }}>
             <div style={{ fontSize: "0.84rem", fontWeight: 800, color: "#1a1a1a", letterSpacing: "0.08em" }}>AIRA</div>
             {!isMobile && (
-              <div style={{ fontSize: "0.55rem", color: "#6b7280", fontWeight: 600, letterSpacing: "0.2em", marginTop: 2 }}>AI VOICE AGENT</div>
+              <div style={{ fontSize: "0.48rem", color: "#6b7280", fontWeight: 600, letterSpacing: "0.15em", marginTop: 2 }}>ADVANCED INTELLIGENT RESPONSIVE ASSISTANT</div>
             )}
           </div>
 
@@ -1452,7 +1578,39 @@ export default function Agent({ user }) {
               </span>
 
               {/* Desktop tools on right of sub-header */}
+              {/* ACTION BUTTONS: Web Search, Paste, Attachment */}
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  onClick={() => setWebSearchEnabled((prev) => !prev)}
+                  title={webSearchEnabled ? "Web Search: ON (Click to disable)" : "Web Search: OFF (Click to enable)"}
+                  style={{
+                    background: webSearchEnabled ? "rgba(59, 130, 246, 0.15)" : "rgba(106,140,255,0.08)",
+                    border: webSearchEnabled ? "1px solid rgba(59, 130, 246, 0.4)" : "1px solid rgba(106,140,255,0.15)",
+                    borderRadius: 8,
+                    height: 32,
+                    padding: "0 10px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    cursor: "pointer",
+                    color: webSearchEnabled ? "#2563eb" : "#6a8cff",
+                    fontWeight: 600,
+                    fontSize: "0.72rem",
+                    transition: "all 0.2s",
+                    boxSizing: "border-box",
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = webSearchEnabled ? "rgba(59, 130, 246, 0.22)" : "rgba(106,140,255,0.15)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = webSearchEnabled ? "rgba(59, 130, 246, 0.15)" : "rgba(106,140,255,0.08)";
+                  }}
+                >
+                  <Globe size={13} />
+                  <span>{webSearchEnabled ? "Web Search ✓" : "Web Search"}</span>
+                </button>
+
                 <button
                   onClick={() => setShowPasteModal(true)}
                   title="Paste large text"
@@ -1460,10 +1618,16 @@ export default function Agent({ user }) {
                     background: "rgba(106,140,255,0.08)",
                     border: "1px solid rgba(106,140,255,0.15)",
                     borderRadius: 8,
-                    width: 30, height: 30,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    cursor: "pointer", color: "#6a8cff",
+                    width: 32,
+                    height: 32,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    color: "#6a8cff",
                     transition: "all 0.2s",
+                    boxSizing: "border-box",
+                    flexShrink: 0,
                   }}
                   onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.15)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(106,140,255,0.08)"; }}
@@ -1488,103 +1652,123 @@ export default function Agent({ user }) {
                 flex: 1,
                 height: "100%",
                 minHeight: 0,
-                overflowY: "auto",
+                overflowY: activeDraft ? "hidden" : "auto",
                 overflowX: "hidden",
                 scrollBehavior: "smooth",
-                padding: "18px 18px 24px",
-                paddingRight: (showEvalPanel && evaluation) ? 306 : 18,
+                padding: activeDraft ? "12px" : "18px 18px 24px",
+                paddingRight: (showEvalPanel && evaluation) ? 306 : (activeDraft ? 12 : 18),
                 transition: "padding-right 0.3s ease",
+                display: activeDraft ? "flex" : "block",
+                flexDirection: "column",
               }}
             >
-              {/* File context indicator (inside scrollable area) */}
-              <AnimatePresence>
-                {fileContext && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 10,
-                      padding: "8px 12px", borderRadius: 12, marginBottom: 10,
-                      background: "rgba(255,255,255,0.85)",
-                      border: "1px solid rgba(0,0,0,0.05)",
-                      boxShadow: "0 4px 12px rgba(120,140,255,0.08)",
-                    }}
-                  >
-                    <div style={{
-                      width: 28, height: 28, borderRadius: 8,
-                      background: "rgba(100,140,255,0.15)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      color: "#6a8cff", flexShrink: 0,
-                    }}>
-                      <FileText size={14} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontSize: "0.7rem", fontWeight: 600, color: "#1a1a1a",
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>
-                        📎 {fileContext.fileName}
-                      </div>
-                      <div style={{ fontSize: "0.58rem", color: "#6b7280" }}>
-                        {fileContext.documentType || "Document"}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setFileContext(null)}
-                      style={{
-                        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
-                        background: "rgba(0,0,0,0.04)",
-                        border: "1px solid rgba(0,0,0,0.05)",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        cursor: "pointer", color: "#ef4444",
-                      }}
-                      title="Remove file"
-                    >
-                      <X size={11} />
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              {activeDraft ? (
+                <EmailDraftPanel
+                  draft={activeDraft}
+                  onChange={(updatedDraft, fieldChanged) => {
+                    setActiveDraft(updatedDraft);
+                    activeDraftRef.current = updatedDraft;
+                    if (fieldChanged) {
+                      userEditedFieldsRef.current[fieldChanged] = true;
+                    }
+                  }}
+                  onSend={handleSendDraft}
+                  onCancel={handleCancelDraft}
+                  isSending={isSendingEmail}
+                />
+              ) : (
+                <>
+                  {/* File context indicator (inside scrollable area) */}
+                  <AnimatePresence>
+                    {fileContext && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          padding: "8px 12px", borderRadius: 12, marginBottom: 10,
+                          background: "rgba(255,255,255,0.85)",
+                          border: "1px solid rgba(0,0,0,0.05)",
+                          boxShadow: "0 4px 12px rgba(120,140,255,0.08)",
+                        }}
+                      >
+                        <div style={{
+                          width: 28, height: 28, borderRadius: 8,
+                          background: "rgba(100,140,255,0.15)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          color: "#6a8cff", flexShrink: 0,
+                        }}>
+                          <FileText size={14} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            fontSize: "0.7rem", fontWeight: 600, color: "#1a1a1a",
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}>
+                            📎 {fileContext.fileName}
+                          </div>
+                          <div style={{ fontSize: "0.58rem", color: "#6b7280" }}>
+                            {fileContext.documentType || "Document"}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setFileContext(null)}
+                          style={{
+                            width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                            background: "rgba(0,0,0,0.04)",
+                            border: "1px solid rgba(0,0,0,0.05)",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            cursor: "pointer", color: "#ef4444",
+                          }}
+                          title="Remove file"
+                        >
+                          <X size={11} />
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-              {/* Empty state */}
-              <AnimatePresence>
-                {messages.length === 0 && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ delay: 0.8, duration: 0.5 }}
-                    style={{
-                      display: "flex", flexDirection: "column",
-                      alignItems: "center", justifyContent: "center",
-                      minHeight: "65%", gap: 14,
-                    }}
-                  >
-                    <div style={{
-                      width: 44, height: 44, borderRadius: 12,
-                      background: "rgba(106,140,255,0.1)", border: "1px solid rgba(106,140,255,0.2)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      <Cpu size={18} color="#6a8cff" />
-                    </div>
-                    <div style={{ textAlign: "center" }}>
-                      <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "#1a1a1a", marginBottom: 2 }}>
-                        Ready to chat
-                      </p>
-                      <p style={{ fontSize: "0.72rem", color: "#6b7280" }}>
-                        Speak to start talking with AIRA.
-                      </p>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  {/* Empty state */}
+                  <AnimatePresence>
+                    {messages.length === 0 && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ delay: 0.8, duration: 0.5 }}
+                        style={{
+                          display: "flex", flexDirection: "column",
+                          alignItems: "center", justifyContent: "center",
+                          minHeight: "65%", gap: 14,
+                        }}
+                      >
+                        <div style={{
+                          width: 44, height: 44, borderRadius: 12,
+                          background: "rgba(106,140,255,0.1)", border: "1px solid rgba(106,140,255,0.2)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          <Cpu size={18} color="#6a8cff" />
+                        </div>
+                        <div style={{ textAlign: "center" }}>
+                          <p style={{ fontSize: "0.82rem", fontWeight: 600, color: "#1a1a1a", marginBottom: 2 }}>
+                            Ready to chat
+                          </p>
+                          <p style={{ fontSize: "0.72rem", color: "#6b7280" }}>
+                            Speak to start talking with AIRA.
+                          </p>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-              <TransientChatBox
-                messages={messages}
-                onRefineEmail={handleUserSpeak}
-                onSendEmail={() => handleUserSpeak("Send it.")}
-              />
+                  <TransientChatBox
+                    messages={messages}
+                    onRefineEmail={handleUserSpeak}
+                    onSendEmail={() => handleUserSpeak("Send it.")}
+                  />
+                </>
+              )}
             </div>
 
           </div>
@@ -1624,7 +1808,10 @@ export default function Agent({ user }) {
               alignItems: "center",
               justifyContent: "center",
               gap: 10,
-              padding: "4px 0 max(16px, env(safe-area-inset-bottom, 16px))",
+              paddingTop: 8,
+              paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
+              paddingLeft: "env(safe-area-inset-left, 0px)",
+              paddingRight: "env(safe-area-inset-right, 0px)",
               flexShrink: 0,
               zIndex: 10,
             }}
@@ -1677,6 +1864,30 @@ export default function Agent({ user }) {
             </button>
 
             <button
+              onClick={() => setWebSearchEnabled((prev) => !prev)}
+              title={webSearchEnabled ? "Web Search: ON" : "Web Search: OFF"}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "0 10px",
+                height: 34,
+                borderRadius: 12,
+                background: webSearchEnabled ? "linear-gradient(135deg, rgba(59,130,246,0.2), rgba(37,99,235,0.15))" : "rgba(255,255,255,0.9)",
+                border: webSearchEnabled ? "1px solid rgba(59,130,246,0.4)" : "1px solid rgba(106,140,255,0.2)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                color: webSearchEnabled ? "#1d4ed8" : "#6a8cff",
+                fontSize: "0.74rem",
+                fontWeight: 700,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              <Globe size={13} color={webSearchEnabled ? "#1d4ed8" : "#6a8cff"} />
+              <span>{webSearchEnabled ? "Web Search ✓" : "Web Search"}</span>
+            </button>
+
+            <button
               onClick={() => setShowPasteModal(true)}
               title="Paste text block"
               style={{
@@ -1702,6 +1913,14 @@ export default function Agent({ user }) {
               onClearFile={() => setFileContext(null)}
               addMessage={addMessage}
               voiceSpeak={(text) => voice.speak(text)}
+              buttonStyle={{
+                width: 34,
+                height: 34,
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.9)",
+                border: "1px solid rgba(106,140,255,0.2)",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+              }}
             />
           </div>
         )}

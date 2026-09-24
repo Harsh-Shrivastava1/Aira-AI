@@ -11,6 +11,7 @@ import {
   generateThreadSummary,
   saveThreadSummaryToFirestore
 } from "./_lib/memoryService.js";
+import { performWebResearch } from "./_lib/webSearchService.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -24,7 +25,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { messageHistory, userName, memory: clientMemory, chatId, conversationSummary: clientSummary } = req.body || {};
+    const { messageHistory, userName, memory: clientMemory, chatId, conversationSummary: clientSummary, webSearch, activeDraft } = req.body || {};
 
     // Verify Firebase identity server-side (never trust arbitrary client-supplied body UID)
     const authResult = await verifyUserToken(req).catch(() => ({ authenticated: false }));
@@ -50,35 +51,32 @@ export default async function handler(req, res) {
       .filter((m) => m.role === "user")
       .slice(-1)[0]?.content || "";
 
+    // 0. Live Web Research (when webSearch is ON)
+    let webResearchResult = { sources: [], contextBlock: "" };
+    if (webSearch && latestUserTurn) {
+      try {
+        webResearchResult = await performWebResearch(latestUserTurn);
+      } catch (searchErr) {
+        console.warn("[WebResearch Error]:", searchErr.message);
+        webResearchResult = {
+          sources: [],
+          contextBlock: "\n\n=== WEB RESEARCH RESULTS ===\nWeb research encountered an error attempting to retrieve live web data for this query.\n============================\n",
+        };
+      }
+    }
+
     // 0. Email / Gmail Intent Handling
     let emailContextBlock = "";
     if (isEmailRelated(latestUserTurn)) {
-      if (!verifiedUid) {
-        return res.status(200).json({
-          reply: "Please sign in to your AIRA account and connect your Gmail so I can check, summarize, draft, or send your emails.",
-          intent: "chat",
-          scenario: "normal",
-          emailDraft: null
-        });
-      }
-
       const emailIntent = detectEmailIntent(latestUserTurn);
-      const gmailStatus = await getGmailStatus(verifiedUid);
-
-      if (!gmailStatus.connected) {
-        return res.status(200).json({
-          reply: "Your Gmail account isn't connected yet. Please connect your Gmail account from your profile menu so I can access, summarize, draft, or send your emails.",
-          intent: "chat",
-          scenario: "normal",
-          emailDraft: null
-        });
-      }
 
       // Branch 1: Explicit Send Protection & Execution
       if (emailIntent === "SEND_EXPLICIT") {
-        const activeDraft = findRecentEmailDraft(messageHistory);
+        const currentDraft = (activeDraft && activeDraft.body)
+          ? activeDraft
+          : findRecentEmailDraft(messageHistory);
 
-        if (!activeDraft || !activeDraft.body) {
+        if (!currentDraft || !currentDraft.body) {
           return res.status(200).json({
             reply: "There's no email draft ready to send. Tell me what you'd like me to write and who to send it to, and I'll draft it for you first.",
             intent: "chat",
@@ -87,51 +85,91 @@ export default async function handler(req, res) {
           });
         }
 
-        const recipient = (activeDraft.to || "").trim();
-        if (!recipient || !isValidEmailAddress(recipient)) {
+        if (!verifiedUid) {
           return res.status(200).json({
-            reply: `I have your draft ready ("${activeDraft.subject || "No Subject"}"), but I need a valid email address to send it to. Who should I send it to?`,
+            reply: "Please sign in to your AIRA account and connect your Gmail so I can send your email. Your draft is still here.",
             intent: "chat",
             scenario: "normal",
-            emailDraft: activeDraft
+            emailDraft: currentDraft,
+            emailError: "auth_required"
+          });
+        }
+
+        const gmailStatus = await getGmailStatus(verifiedUid);
+        if (!gmailStatus.connected) {
+          return res.status(200).json({
+            reply: "Your Gmail account isn't connected yet. Please connect your Gmail account from your profile menu so I can send your emails. Your draft is still here.",
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: currentDraft,
+            emailError: "gmail_not_connected"
+          });
+        }
+
+        const recipient = (currentDraft.to || "").trim();
+        if (!recipient || !isValidEmailAddress(recipient)) {
+          return res.status(200).json({
+            reply: `I have your draft ready ("${currentDraft.subject || "No Subject"}"), but I need a valid email address to send it to. Who should I send it to?`,
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: currentDraft
           });
         }
 
         try {
-          if (activeDraft.threadId) {
+          if (currentDraft.threadId) {
             await replyToThread(verifiedUid, {
-              threadId: activeDraft.threadId,
+              threadId: currentDraft.threadId,
               to: recipient,
-              subject: activeDraft.subject,
-              body: activeDraft.body
+              subject: currentDraft.subject,
+              body: currentDraft.body
             });
           } else {
             await sendEmail(verifiedUid, {
               to: recipient,
-              subject: activeDraft.subject,
-              body: activeDraft.body
+              subject: currentDraft.subject,
+              body: currentDraft.body
             });
           }
 
           return res.status(200).json({
-            reply: `Sent. Your email to ${recipient} with subject "${activeDraft.subject || "No Subject"}" was sent successfully.`,
+            reply: `Sent. Your email to ${recipient} with subject "${currentDraft.subject || "No Subject"}" was sent successfully.`,
             intent: "chat",
             scenario: "normal",
-            emailDraft: null
+            emailDraft: null,
+            emailSent: true
           });
         } catch (sendErr) {
           console.error(`[Gmail Send Error] user ${verifiedUid}:`, sendErr.message);
           return res.status(200).json({
-            reply: `I ran into an issue sending your email: ${sendErr.message}. Your draft is saved below if you want to retry.`,
+            reply: `Couldn't send the email: ${sendErr.message}. Your draft is still here.`,
             intent: "chat",
             scenario: "normal",
-            emailDraft: activeDraft
+            emailDraft: currentDraft,
+            emailError: sendErr.message
           });
         }
       }
 
       // Branch 2: Search or Read Emails
       if (emailIntent === "SEARCH_READ") {
+        if (!verifiedUid) {
+          return res.status(200).json({
+            reply: "Please sign in to your AIRA account and connect your Gmail so I can check or search your emails.",
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: null
+          });
+        }
+        const gmailStatus = await getGmailStatus(verifiedUid);
+        if (!gmailStatus.connected) {
+          return res.status(200).json({
+            reply: "Your Gmail account isn't connected yet. Please connect your Gmail account from your profile menu so I can search your emails.",
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: null
+          });
+        }
         try {
           const query = extractGmailSearchQuery(latestUserTurn);
           const messages = await searchEmails(verifiedUid, query, 3);
@@ -181,9 +219,47 @@ CRITICAL INSTRUCTIONS FOR GMAIL CONTEXT:
       summaryBlock = `\n\n=== CONVERSATION SUMMARY (EARLIER IN THIS THREAD) ===\n${threadSummary}`;
     }
 
+    let webSearchBlock = "";
+    if (webSearch) {
+      webSearchBlock = `${webResearchResult.contextBlock}
+========================
+LIVE WEB RESEARCH MODE RULES (WEB SEARCH IS ACTIVE)
+========================
+1. Ground your answer in the retrieved web sources provided above whenever available.
+2. Structure your response professionally:
+   - Begin with a direct, comprehensive answer (use ## Answer if detailed).
+   - Include ### Key Points when summarizing multiple findings.
+   - Include ### Details for in-depth technical or explanatory context.
+   - Connect claims to sources using bracketed inline citations like [1], [2] corresponding to the retrieved sources.
+3. DISTINGUISH SOURCES: Clearly distinguish information verified from retrieved web pages from your general reasoning.
+4. ACCURACY & INTEGRITY:
+   - NEVER fabricate or invent citations, URLs, dates, or source names.
+   - NEVER claim a website was consulted if it is not present in the retrieved sources above.
+   - If the retrieved sources do not contain enough info, or if retrieval was unavailable, clearly state: "I couldn't access live web sources to verify this right now" or "Live search did not return reliable sources for this query" and answer only from general knowledge while stating so.
+5. If the user provided a direct URL to summarize or analyze:
+   - Summarize ONLY what was retrieved from that URL.
+   - If the URL could not be accessed, clearly state that the page could not be accessed rather than inventing its content.`;
+    }
+
+    let activeDraftBlock = "";
+    if (activeDraft && (activeDraft.body || activeDraft.subject)) {
+      activeDraftBlock = `\n\n=== CURRENT ACTIVE EMAIL DRAFT (USER IS REVIEWING/EDITING) ===
+To: ${activeDraft.to || "(not specified yet)"}
+Subject: ${activeDraft.subject || "(no subject yet)"}
+Body:
+${activeDraft.body || ""}
+Thread ID: ${activeDraft.threadId || "none"}
+==================================================
+CRITICAL INSTRUCTIONS FOR CURRENT EMAIL DRAFT:
+1. The user is currently reviewing and interacting with this email draft in the UI.
+2. If the user asks to modify, rewrite, adjust tone (e.g. "more professional", "more casual", "make it shorter", "make it longer"), change the subject, change recipient, or adjust wording, you MUST return the updated "emailDraft" object in your JSON response with the updated fields, preserving any fields the user did not ask to change.
+3. Keep your conversational "reply" very short and natural (1 concise sentence), confirming the change (e.g., "I've made it more professional." or "Updated the subject.").
+4. DRAFTS ARE NEVER AUTOMATICALLY SENT. Only send if user explicitly confirms sending.`;
+    }
+
     const relevantMemoryBlock = profileMemoryItem
-      ? `=== RELEVANT CONTEXT (SILENT BACKGROUND CONTEXT — NOT A SCRIPT) ===\n${profileMemoryItem.content}\n\n=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${summaryBlock}${emailContextBlock}`
-      : `=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${summaryBlock}${emailContextBlock}`;
+      ? `=== RELEVANT CONTEXT (SILENT BACKGROUND CONTEXT — NOT A SCRIPT) ===\n${profileMemoryItem.content}\n\n=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${summaryBlock}${emailContextBlock}${activeDraftBlock}${webSearchBlock ? `\n\n${webSearchBlock}` : ""}`
+      : `=== RELEVANT SESSION MEMORY ===\n${sessionMemory}${summaryBlock}${emailContextBlock}${activeDraftBlock}${webSearchBlock ? `\n\n${webSearchBlock}` : ""}`;
 
     const systemPrompt = `You are AIRA — a voice-first AI assistant. You are intelligent, calm, warm, confident, socially aware, and direct. You feel like a real person having a natural, capable conversation with an engineering peer, not a scripted customer-support chatbot.
 
@@ -283,15 +359,16 @@ OUTPUT FORMAT (STRICT JSON)
 Always return valid JSON in exactly this structure:
 {
   "reply": "Conversational, voice-ready response",
-  "intent": "chat | start_session | end_session | evaluate",
+  "intent": "chat | start_session | end_session",
   "scenario": "normal | interview | teaching | roleplay | problem_solving",
   "emailDraft": { "to": "...", "subject": "...", "body": "...", "threadId": "..." } | null
 }
 
 CRITICAL EMAIL RULES:
-1. ONLY provide "emailDraft" if the user EXPLICITLY asked you to draft, write, or compose an email/reply. Otherwise set "emailDraft" to null.
-2. DRAFTS ARE NEVER AUTOMATICALLY SENT. When generating an emailDraft, always explain conversationally that the draft is ready for their review and let them know they can say "Send it" when ready.
-3. If drafting a reply to a previous email from search results, populate "threadId" with the matching thread ID and set "to" to the sender's email address.
+1. Provide "emailDraft" if the user asked to draft/compose an email OR if an active email draft is being refined/edited (e.g. "make it more professional", "make it shorter", "change the subject", "change tomorrow to Monday"). Otherwise set "emailDraft" to null.
+2. When refining an active draft, keep unchanged fields from the active draft and update only what the user requested.
+3. DRAFTS ARE NEVER AUTOMATICALLY SENT. When generating an emailDraft, always explain conversationally that the draft is ready for their review and let them know they can say "Send it" when ready.
+4. If drafting a reply to a previous email from search results, populate "threadId" with the matching thread ID and set "to" to the sender's email address.
 
 ========================
 END
@@ -311,20 +388,20 @@ END
     ];
 
     const { content: rawContent } = await createGroqChatCompletion(messages, {
-      temperature: 0.65,
+      temperature: webSearch ? 0.4 : 0.65,
       response_format: { type: "json_object" },
-      max_tokens: 800
+      max_tokens: webSearch ? 1400 : 800
     });
 
     const content = JSON.parse(rawContent || "{}");
 
     let finalEmailDraft = null;
-    if (content.emailDraft && content.emailDraft.subject && content.emailDraft.body) {
-      const subject = content.emailDraft.subject.trim();
-      const body = content.emailDraft.body.trim();
-      const to = content.emailDraft.to ? content.emailDraft.to.trim() : "";
-      const threadId = content.emailDraft.threadId ? content.emailDraft.threadId.trim() : null;
-      if (subject !== "..." && body !== "..." && subject.length > 2 && body.length > 5) {
+    if (content.emailDraft && (content.emailDraft.subject || content.emailDraft.body)) {
+      const subject = (content.emailDraft.subject || activeDraft?.subject || "").trim();
+      const body = (content.emailDraft.body || activeDraft?.body || "").trim();
+      const to = content.emailDraft.to ? content.emailDraft.to.trim() : (activeDraft?.to || "");
+      const threadId = content.emailDraft.threadId ? content.emailDraft.threadId.trim() : (activeDraft?.threadId || null);
+      if (subject !== "..." && body !== "..." && (subject.length > 2 || body.length > 5)) {
         finalEmailDraft = { to, subject, body, threadId };
       }
     }
@@ -344,7 +421,8 @@ END
       reply: content.reply || "Something went wrong on my end. Try again?",
       intent: content.intent || "chat",
       scenario: content.scenario || "normal",
-      emailDraft: finalEmailDraft
+      emailDraft: finalEmailDraft,
+      sources: webSearch ? webResearchResult.sources : undefined
     });
 
   } catch (error) {

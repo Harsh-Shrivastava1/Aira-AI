@@ -3,7 +3,7 @@
  */
 
 const EMAIL_KEYWORDS = /\b(email|emails|gmail|inbox|mailbox|unread)\b/i;
-const EXPLICIT_SEND_REGEX = /\b(send it|send the email|send this email|send that email|go ahead and send|please send it|send the draft)\b/i;
+const EXPLICIT_SEND_REGEX = /\b(send it|send the email|send this email|send that email|send this|okay send|ok send|go ahead and send|please send it|send the draft|send now)\b/i;
 const DRAFT_REGEX = /\b(draft|compose|write an email|write a reply|draft a reply|prepare an email|prepare a draft|don't send|dont send|just show me the draft|show the draft)\b/i;
 const SEARCH_READ_REGEX = /\b(check|read|search|any|did|what did|summarize|find|look for|show|got|received)\b.*\b(email|emails|mail|inbox|reply)\b/i;
 
