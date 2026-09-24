@@ -11,6 +11,7 @@ import { getActiveChatId, createNewThread, saveMessage, fetchThreadMessages, fet
 import { auth } from "../config/firebase";
 import { API_BASE } from "../config/api";
 import { classifyError, sanitizeLogDetails, ERROR_MESSAGES } from "../services/errorRecoveryService";
+import { useToast } from "../components/Toast";
 const API = `${API_BASE}/api`;
 
 /**
@@ -163,9 +164,25 @@ export default function Agent({ user }) {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [gmailStatus, setGmailStatus] = useState({ connected: false });
   const profileRef = useRef(null);
+  const { showToast } = useToast();
+
+  const addMessage = useCallback((role, text, emailDraft = null, type = "text") => {
+    setMessages((prev) => [...prev, { id: Date.now() + Math.random(), role, text, emailDraft, type }]);
+  }, []);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("aira_just_logged_in")) {
+      sessionStorage.removeItem("aira_just_logged_in");
+      showToast({
+        title: "Welcome back",
+        message: "You're signed in to AIRA.",
+        type: "success",
+      });
+    }
+  }, [showToast]);
 
   const checkGmailStatus = useCallback(async () => {
-    if (!user) return;
+    if (!user) return null;
     try {
       const idToken = await user.getIdToken?.().catch(() => null);
       const headers = idToken ? { Authorization: `Bearer ${idToken}` } : {};
@@ -173,10 +190,12 @@ export default function Agent({ user }) {
       if (resp.ok) {
         const data = await resp.json();
         setGmailStatus(data);
+        return data;
       }
     } catch (err) {
       console.warn("[Gmail] Status check error:", err.message);
     }
+    return null;
   }, [user]);
 
   useEffect(() => {
@@ -195,8 +214,17 @@ export default function Agent({ user }) {
         setShowUserMenu(false);
       }
     };
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setShowUserMenu(false);
+      }
+    };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
   const [currentScenario, setCurrentScenario] = useState(null);
   const [memoryText, setMemoryText] = useState(null);
@@ -269,12 +297,129 @@ export default function Agent({ user }) {
       if (!ok) {
         setHistory(previousHistory);
         console.error("Failed to soft-delete conversation from database");
+        showToast({
+          title: "Couldn't Clear History",
+          message: "Your chat history could not be cleared. Please try again.",
+          type: "error",
+        });
+      } else {
+        showToast({
+          title: "Chat History Cleared",
+          message: "Your chat history has been cleared.",
+          type: "success",
+        });
       }
     } catch (err) {
       setHistory(previousHistory);
       console.error("Error soft-deleting conversation:", err);
+      showToast({
+        title: "Couldn't Clear History",
+        message: "Your chat history could not be cleared. Please try again.",
+        type: "error",
+      });
     }
   };
+
+  const handleClearHistory = useCallback(async () => {
+    if (!user?.uid) return;
+    const currentThreads = await fetchAllThreads(user.uid);
+    if (!currentThreads || currentThreads.length === 0) {
+      showToast({
+        title: "Nothing to Clear",
+        message: "There are no conversations to clear.",
+        type: "info",
+      });
+      return;
+    }
+
+    try {
+      let anyFailed = false;
+      for (const thread of currentThreads) {
+        const ok = await softDeleteThread(user.uid, thread.id);
+        if (!ok) anyFailed = true;
+      }
+
+      if (anyFailed) {
+        showToast({
+          title: "Couldn't Clear History",
+          message: "Your chat history could not be cleared. Please try again.",
+          type: "error",
+        });
+        await loadHistory();
+      } else {
+        setHistory([]);
+        setMessages([]);
+        setChatId(null);
+        messageHistoryRef.current = [];
+        showToast({
+          title: "Chat History Cleared",
+          message: "Your chat history has been cleared.",
+          type: "success",
+        });
+      }
+    } catch (err) {
+      console.error("Error clearing chat history:", err);
+      showToast({
+        title: "Couldn't Clear History",
+        message: "Your chat history could not be cleared. Please try again.",
+        type: "error",
+      });
+    }
+  }, [user?.uid, loadHistory, showToast]);
+
+  const handleStartNewConversation = useCallback(async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    activeRequestIdRef.current += 1;
+    voice.cancelActiveSpeech();
+
+    if (user?.uid) {
+      try {
+        const newId = await createNewThread(user.uid);
+        if (newId) {
+          setChatId(newId);
+          setMessages([]);
+          messageHistoryRef.current = [];
+          const reply = "New conversation started. What's on your mind?";
+          addMessage("aira", reply);
+          voice.speak(reply);
+          showToast({
+            title: "New Conversation",
+            message: "Your new conversation has started.",
+            type: "success",
+          });
+        } else {
+          showToast({
+            title: "Couldn't Start Conversation",
+            message: "Your new conversation could not be started. Please try again.",
+            type: "error",
+          });
+        }
+      } catch (err) {
+        console.error("Failed to start new conversation:", err);
+        showToast({
+          title: "Couldn't Start Conversation",
+          message: "Your new conversation could not be started. Please try again.",
+          type: "error",
+        });
+      }
+    }
+  }, [user?.uid, addMessage, voice, showToast]);
+
+  const handleSignOut = useCallback(() => {
+    setShowUserMenu(false);
+    sessionStorage.setItem("aira_just_signed_out", "true");
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    activeRequestIdRef.current += 1;
+    voice.cancelActiveSpeech();
+    voice.stopListening();
+    auth.signOut();
+  }, [voice]);
 
   useEffect(() => {
     if (user?.uid) {
@@ -304,36 +449,97 @@ export default function Agent({ user }) {
     }
   }, [user?.uid]);
 
-  const addMessage = useCallback((role, text, emailDraft = null, type = "text") => {
-    setMessages((prev) => [...prev, { id: Date.now() + Math.random(), role, text, emailDraft, type }]);
-  }, []);
+
+
+  const hasHandledOAuthRef = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const gmailParam = params.get("gmail");
+    if (!gmailParam) return;
+    if (hasHandledOAuthRef.current) return;
+    hasHandledOAuthRef.current = true;
+
+    window.history.replaceState({}, document.title, window.location.pathname);
+
     if (gmailParam === "connected") {
-      window.history.replaceState({}, document.title, window.location.pathname);
-      checkGmailStatus();
-      const msg = "Gmail connected successfully! You can now ask me to check, summarize, draft, or send your emails.";
-      addMessage("aira", msg);
-      voice.speak(msg);
-    } else if (gmailParam === "denied" || gmailParam === "error") {
-      window.history.replaceState({}, document.title, window.location.pathname);
-      const msg = "Gmail authorization could not be completed. You can try connecting again whenever you're ready.";
-      addMessage("aira", msg);
+      checkGmailStatus().then((status) => {
+        if (status?.connected) {
+          const msg = "Gmail connected successfully! You can now ask me to check, summarize, draft, or send your emails.";
+          addMessage("aira", msg);
+          voice.speak(msg);
+          showToast({
+            title: "Gmail Connected",
+            message: "Your Gmail account is connected. You can now ask AIRA to read emails, find messages, draft emails, and send emails when you explicitly ask.",
+            type: "success",
+          });
+        } else {
+          showToast({
+            title: "Couldn't Connect Gmail",
+            message: "Gmail wasn't connected. Please try again.",
+            type: "error",
+          });
+        }
+      }).catch(() => {
+        showToast({
+          title: "Couldn't Connect Gmail",
+          message: "Gmail wasn't connected. Please try again.",
+          type: "error",
+        });
+      });
+    } else if (gmailParam === "denied") {
+      showToast({
+        title: "Gmail Connection Cancelled",
+        message: "No changes were made to your Gmail connection.",
+        type: "info",
+      });
+    } else if (gmailParam === "error") {
+      showToast({
+        title: "Couldn't Connect Gmail",
+        message: "Gmail wasn't connected. Please try again.",
+        type: "error",
+      });
     }
-  }, [checkGmailStatus, addMessage, voice]);
+  }, [checkGmailStatus, addMessage, voice, showToast]);
 
   const handleConnectGmail = useCallback(async () => {
     try {
-      const idToken = await user?.getIdToken?.().catch(() => null);
-      if (!idToken) {
-        window.location.href = `${API_BASE}/api/gmail/auth`;
+      if (!user) {
+        showToast({
+          title: "Couldn't Connect Gmail",
+          message: "Please sign in to AIRA to connect your Gmail account.",
+          type: "error",
+        });
         return;
       }
-      const resp = await fetch(`${API_BASE}/api/gmail/auth?redirect=false`, {
-        headers: { Authorization: `Bearer ${idToken}`, Accept: "application/json" },
+
+      if (gmailStatus?.connected) {
+        showToast({
+          title: "Gmail Already Connected",
+          message: "Your Gmail account is already connected. You can ask AIRA to read or manage your email.",
+          type: "info",
+        });
+        return;
+      }
+
+      const idToken = await user.getIdToken?.().catch(() => null);
+      if (!idToken) {
+        showToast({
+          title: "Couldn't Connect Gmail",
+          message: "Authentication required. Please sign in to AIRA to connect your Gmail account.",
+          type: "error",
+        });
+        return;
+      }
+
+      const resp = await fetch(`${API_BASE}/api/gmail/auth`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          Accept: "application/json",
+        },
       });
+
       if (resp.ok) {
         const data = await resp.json();
         if (data.authUrl) {
@@ -341,12 +547,23 @@ export default function Agent({ user }) {
           return;
         }
       }
-      window.location.href = `${API_BASE}/api/gmail/auth?token=${encodeURIComponent(idToken)}`;
+
+      const errData = await resp.json().catch(() => null);
+      console.warn("[Gmail Connect Error]: Failed to get auth URL:", errData?.error || resp.statusText);
+      showToast({
+        title: "Couldn't Connect Gmail",
+        message: "Gmail wasn't connected. Please try again.",
+        type: "error",
+      });
     } catch (err) {
-      console.warn("[Gmail Connect Error]:", err);
-      window.location.href = `${API_BASE}/api/gmail/auth`;
+      console.warn("[Gmail Connect Error]:", err.message || err);
+      showToast({
+        title: "Couldn't Connect Gmail",
+        message: "Gmail wasn't connected. Please try again.",
+        type: "error",
+      });
     }
-  }, [user]);
+  }, [user, gmailStatus, showToast]);
 
   const handleDisconnectGmail = useCallback(async () => {
     try {
@@ -359,11 +576,40 @@ export default function Agent({ user }) {
       if (resp.ok) {
         setGmailStatus({ connected: false });
         addMessage("aira", "Your Gmail account has been disconnected.");
+        showToast({
+          title: "Gmail Disconnected",
+          message: "Your Gmail account has been disconnected from AIRA.",
+          type: "success",
+        });
+      } else {
+        showToast({
+          title: "Couldn't Disconnect Gmail",
+          message: "Your Gmail connection could not be removed. Please try again.",
+          type: "error",
+        });
       }
     } catch (err) {
       console.warn("[Gmail Disconnect Error]:", err);
+      showToast({
+        title: "Couldn't Disconnect Gmail",
+        message: "Your Gmail connection could not be removed. Please try again.",
+        type: "error",
+      });
     }
-  }, [user, addMessage]);
+  }, [user, addMessage, showToast]);
+
+  useEffect(() => {
+    window.__aira_test_actions = {
+      handleClearHistory,
+      handleStartNewConversation,
+      handleConnectGmail,
+      handleDisconnectGmail,
+      showToast,
+    };
+    return () => {
+      delete window.__aira_test_actions;
+    };
+  }, [handleClearHistory, handleStartNewConversation, handleConnectGmail, handleDisconnectGmail, showToast]);
 
   const handleEvaluate = useCallback(async (scenario) => {
     if (hasShownScoreRef.current) return null;
@@ -1139,9 +1385,9 @@ export default function Agent({ user }) {
               background: "rgba(255, 255, 255, 0.70)",
               backdropFilter: "blur(20px)",
               WebkitBackdropFilter: "blur(20px)",
-              border: "1px solid rgba(255, 255, 255, 0.75)",
+              border: "1px solid rgba(0, 0, 0, 0.06)",
               borderRadius: 24,
-              boxShadow: "0 8px 32px rgba(100, 140, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04)",
+              boxShadow: "none",
               margin: "16px 0 20px",
               height: "calc(100% - 36px)",
               flexShrink: 0,
@@ -1396,24 +1642,7 @@ export default function Agent({ user }) {
             </button>
 
             <button
-              onClick={async () => {
-                if (abortControllerRef.current) {
-                  abortControllerRef.current.abort();
-                  abortControllerRef.current = null;
-                }
-                activeRequestIdRef.current += 1;
-                voice.cancelActiveSpeech();
-
-                if (user?.uid) {
-                  const newId = await createNewThread(user.uid);
-                  setChatId(newId);
-                  setMessages([]);
-                  messageHistoryRef.current = [];
-                  const reply = "New conversation started. What's on your mind?";
-                  addMessage("aira", reply);
-                  voice.speak(reply);
-                }
-              }}
+              onClick={handleStartNewConversation}
               title="New Conversation"
               style={{
                 display: "flex",
@@ -1508,30 +1737,93 @@ export default function Agent({ user }) {
         <AnimatePresence>
           {showUserMenu && (
             <motion.div
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
+              initial={{ opacity: 0, y: -6, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.98 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
               style={{
                 position: "absolute",
-                top: 55,
+                top: isMobile ? 44 : 50,
                 right: 0,
-                width: 180,
+                width: 256,
+                maxWidth: "calc(100vw - 32px)",
                 background: "#ffffff",
-                borderRadius: 12,
-                boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-                padding: 8,
+                borderRadius: 14,
+                boxShadow: "0 10px 30px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.04)",
+                padding: 6,
                 display: "flex",
                 flexDirection: "column",
-                gap: 4,
-                border: "1px solid rgba(0,0,0,0.05)",
+                gap: 2,
+                border: "1px solid #e2e8f0",
+                zIndex: 1000,
               }}
             >
-              <div style={{ padding: "8px 12px", borderBottom: "1px solid #f3f4f6", marginBottom: 4 }}>
-                <p style={{ fontSize: "0.75rem", fontWeight: 700, color: "#1a1a1a", marginBottom: 2 }}>{user?.displayName || "User"}</p>
-                <p style={{ fontSize: "0.65rem", color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</p>
+              {/* Account Header */}
+              <div
+                style={{
+                  padding: "8px 10px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: "50%",
+                    overflow: "hidden",
+                    flexShrink: 0,
+                    border: "1px solid #e2e8f0",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "#f1f5f9",
+                  }}
+                >
+                  {user?.photoURL ? (
+                    <img src={user.photoURL} alt="User" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #6a8cff, #8ed0ff)", display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: "0.82rem" }}>
+                      {user?.displayName?.charAt(0).toUpperCase() || "U"}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                  <span
+                    style={{
+                      fontSize: "0.84rem",
+                      fontWeight: 600,
+                      color: "#0f172a",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      lineHeight: 1.3,
+                    }}
+                    title={user?.displayName || "User"}
+                  >
+                    {user?.displayName || "User"}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "#64748b",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      lineHeight: 1.3,
+                    }}
+                    title={user?.email || ""}
+                  >
+                    {user?.email || ""}
+                  </span>
+                </div>
               </div>
 
+              {/* Divider */}
+              <div style={{ height: 1, background: "#f1f5f9", margin: "3px 0" }} />
+
+              {/* Chat History */}
               <button
                 onClick={() => {
                   setShowUserMenu(false);
@@ -1539,95 +1831,177 @@ export default function Agent({ user }) {
                   loadHistory();
                 }}
                 style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "10px 12px", borderRadius: 8,
-                  fontSize: "0.85rem", fontWeight: 500, color: "#4b5563",
-                  background: "transparent", border: "none", cursor: "pointer",
-                  transition: "all 0.2s ease",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  fontSize: "0.84rem",
+                  fontWeight: 500,
+                  color: "#334155",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
                   textAlign: "left",
+                  width: "100%",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "#f3f6ff"; e.currentTarget.style.color = "#3b82f6"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#4b5563"; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#f8fafc";
+                  e.currentTarget.style.color = "#0f172a";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "#334155";
+                }}
               >
-                <MessageCircle size={15} />
-                Chat History
+                <MessageCircle size={15} color="#64748b" style={{ flexShrink: 0 }} />
+                <span>Chat History</span>
               </button>
 
+              {/* New Conversation */}
               <button
-                onClick={async () => {
+                onClick={() => {
                   setShowUserMenu(false);
-                  if (abortControllerRef.current) {
-                    abortControllerRef.current.abort();
-                    abortControllerRef.current = null;
-                  }
-                  activeRequestIdRef.current += 1;
-                  voice.cancelActiveSpeech();
-
-                  if (user?.uid) {
-                    const newId = await createNewThread(user.uid);
-                    setChatId(newId);
-                    setMessages([]);
-                    messageHistoryRef.current = [];
-                    const reply = "New conversation started. What's on your mind?";
-                    addMessage("aira", reply);
-                    voice.speak(reply);
-                  }
+                  handleStartNewConversation();
                 }}
                 style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "10px 12px", borderRadius: 8,
-                  fontSize: "0.85rem", fontWeight: 500, color: "#4b5563",
-                  background: "transparent", border: "none", cursor: "pointer",
-                  transition: "all 0.2s ease",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  fontSize: "0.84rem",
+                  fontWeight: 500,
+                  color: "#334155",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
                   textAlign: "left",
+                  width: "100%",
+                  whiteSpace: "nowrap",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "#f3f6ff"; e.currentTarget.style.color = "#3b82f6"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#4b5563"; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#f8fafc";
+                  e.currentTarget.style.color = "#0f172a";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "#334155";
+                }}
               >
-                <Cpu size={15} />
-                New Conversation
+                <Cpu size={15} color="#64748b" style={{ flexShrink: 0 }} />
+                <span>New Conversation</span>
               </button>
 
-              {/* Gmail Connection Option */}
+              {/* Divider */}
+              <div style={{ height: 1, background: "#f1f5f9", margin: "3px 0" }} />
+
+              {/* Gmail Integration Section */}
               {gmailStatus?.connected ? (
                 <div
+                  onClick={() => {
+                    showToast({
+                      title: "Gmail Already Connected",
+                      message: "Your Gmail account is already connected. You can ask AIRA to read or manage your email.",
+                      type: "info",
+                    });
+                  }}
                   style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "8px 12px", borderRadius: 8,
-                    background: "rgba(16, 185, 129, 0.05)",
-                    border: "1px solid rgba(16, 185, 129, 0.15)",
-                    marginBottom: 2,
+                    padding: "9px 10px",
+                    borderRadius: 9,
+                    background: "#f8fafc",
+                    border: "1px solid #e2e8f0",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    cursor: "pointer",
+                    transition: "border-color 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "#cbd5e1";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "#e2e8f0";
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0, overflow: "hidden" }}>
-                    <Mail size={15} color="#10b981" style={{ flexShrink: 0 }} />
-                    <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                      <span style={{ fontSize: "0.80rem", color: "#10b981", fontWeight: 600 }}>Gmail Connected</span>
-                      {gmailStatus?.emailAddress && (
-                        <span style={{ fontSize: "0.62rem", color: "#6b7280", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {gmailStatus.emailAddress}
-                        </span>
-                      )}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                      <Mail size={14} color="#475569" style={{ flexShrink: 0 }} />
+                      <span style={{ fontSize: "0.80rem", fontWeight: 600, color: "#1e293b" }}>Gmail</span>
+                    </div>
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        padding: "2px 7px",
+                        borderRadius: 12,
+                        background: "rgba(16, 185, 129, 0.08)",
+                        border: "1px solid rgba(16, 185, 129, 0.2)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 5,
+                          height: 5,
+                          borderRadius: "50%",
+                          background: "#10b981",
+                          display: "inline-block",
+                        }}
+                      />
+                      <span style={{ fontSize: "0.68rem", fontWeight: 600, color: "#059669" }}>Connected</span>
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowUserMenu(false);
-                      handleDisconnectGmail();
-                    }}
-                    title="Disconnect Gmail"
-                    style={{
-                      fontSize: "0.68rem", color: "#ef4444", background: "rgba(239,68,68,0.08)",
-                      border: "1px solid rgba(239,68,68,0.2)", borderRadius: 6,
-                      padding: "3px 8px", cursor: "pointer", marginLeft: 8, flexShrink: 0,
-                      fontWeight: 600,
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(239,68,68,0.18)"}
-                    onMouseLeave={(e) => e.currentTarget.style.background = "rgba(239,68,68,0.08)"}
-                  >
-                    Disconnect
-                  </button>
+
+                  {gmailStatus?.emailAddress && (
+                    <div
+                      style={{
+                        fontSize: "0.71rem",
+                        color: "#64748b",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        paddingLeft: 2,
+                      }}
+                      title={gmailStatus.emailAddress}
+                    >
+                      {gmailStatus.emailAddress}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 2 }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowUserMenu(false);
+                        handleDisconnectGmail();
+                      }}
+                      title="Disconnect Gmail"
+                      style={{
+                        fontSize: "0.69rem",
+                        fontWeight: 500,
+                        color: "#dc2626",
+                        background: "transparent",
+                        border: "1px solid rgba(220, 38, 38, 0.2)",
+                        borderRadius: 6,
+                        padding: "2px 8px",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "#fee2e2";
+                        e.currentTarget.style.borderColor = "#fca5a5";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.borderColor = "rgba(220, 38, 38, 0.2)";
+                      }}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button
@@ -1636,44 +2010,71 @@ export default function Agent({ user }) {
                     handleConnectGmail();
                   }}
                   style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    padding: "10px 12px", borderRadius: 8,
-                    fontSize: "0.85rem", fontWeight: 500,
-                    color: "#4b5563",
-                    background: "transparent", border: "none",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    fontSize: "0.84rem",
+                    fontWeight: 500,
+                    color: "#334155",
+                    background: "transparent",
+                    border: "none",
                     cursor: "pointer",
-                    transition: "all 0.2s ease",
-                    textAlign: "left", width: "100%",
+                    transition: "all 0.15s ease",
+                    textAlign: "left",
+                    width: "100%",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "#f3f6ff";
-                    e.currentTarget.style.color = "#3b82f6";
+                    e.currentTarget.style.background = "#f8fafc";
+                    e.currentTarget.style.color = "#0f172a";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = "#4b5563";
+                    e.currentTarget.style.color = "#334155";
                   }}
                 >
-                  <Mail size={15} color="#6b7280" />
-                  <span style={{ fontSize: "0.82rem" }}>Connect Gmail</span>
+                  <Mail size={15} color="#64748b" style={{ flexShrink: 0 }} />
+                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ fontSize: "0.84rem", fontWeight: 500, color: "#334155" }}>Connect Gmail</span>
+                    <span style={{ fontSize: "0.68rem", color: "#94a3b8" }}>Connect your Gmail account</span>
+                  </div>
                 </button>
               )}
 
+              {/* Divider */}
+              <div style={{ height: 1, background: "#f1f5f9", margin: "3px 0" }} />
+
+              {/* Sign Out */}
               <button
-                onClick={() => auth.signOut()}
+                onClick={handleSignOut}
                 style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "10px 12px", borderRadius: 8,
-                  fontSize: "0.85rem", fontWeight: 500, color: "#ff4d4f",
-                  background: "transparent", border: "none", cursor: "pointer",
-                  transition: "all 0.2s ease",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  fontSize: "0.84rem",
+                  fontWeight: 500,
+                  color: "#ef4444",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
                   textAlign: "left",
+                  width: "100%",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "#fff1f0"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#fef2f2";
+                  e.currentTarget.style.color = "#dc2626";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "#ef4444";
+                }}
               >
-                <LogOut size={15} />
-                Sign out
+                <LogOut size={15} color="#ef4444" style={{ flexShrink: 0 }} />
+                <span>Sign out</span>
               </button>
             </motion.div>
           )}
@@ -1786,6 +2187,7 @@ export default function Agent({ user }) {
       </AnimatePresence>
 
       {/* ─── HISTORY SIDEBAR ─── */}
+      {/* ─── HISTORY SIDEBAR ─── */}
       <AnimatePresence>
         {showHistory && (
           <>
@@ -1793,113 +2195,348 @@ export default function Agent({ user }) {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
               onClick={() => setShowHistory(false)}
               style={{
-                position: "fixed", inset: 0, background: "rgba(0,0,0,0.2)",
-                backdropFilter: "blur(4px)", zIndex: 1100,
+                position: "fixed",
+                inset: 0,
+                background: "rgba(15, 23, 42, 0.22)",
+                backdropFilter: "blur(2px)",
+                zIndex: 1100,
               }}
             />
             <motion.div
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              transition={{ type: "spring", damping: 28, stiffness: 260 }}
               style={{
-                position: "fixed", top: 0, right: 0, bottom: 0,
-                width: 340, background: "#fff", zIndex: 1200,
-                boxShadow: "-10px 0 40px rgba(0,0,0,0.1)",
-                display: "flex", flexDirection: "column",
+                position: "fixed",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                width: isMobile ? "100%" : 390,
+                maxWidth: "100vw",
+                background: "#ffffff",
+                zIndex: 1200,
+                boxShadow: "-8px 0 32px rgba(15, 23, 42, 0.08)",
+                borderLeft: "1px solid #e2e8f0",
+                display: "flex",
+                flexDirection: "column",
               }}
             >
-              <div style={{ padding: "24px 20px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <h2 style={{ fontSize: "1.1rem", fontWeight: 800, color: "#1a1a1a", letterSpacing: "-0.02em" }}>Chat History</h2>
-                <button
-                  onClick={() => setShowHistory(false)}
-                  style={{ background: "#f1f5f9", border: "none", borderRadius: "50%", width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-                >
-                  <X size={16} color="#64748b" />
-                </button>
+              {/* Header */}
+              <div
+                style={{
+                  padding: "18px 20px",
+                  borderBottom: "1px solid #f1f5f9",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexShrink: 0,
+                }}
+              >
+                <div>
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: "1.12rem",
+                      fontWeight: 700,
+                      color: "#0f172a",
+                      letterSpacing: "-0.02em",
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    Chat History
+                  </h2>
+                  <p
+                    style={{
+                      margin: "2px 0 0",
+                      fontSize: "0.75rem",
+                      color: "#64748b",
+                      fontWeight: 450,
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    Your conversations
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {history.length > 0 && (
+                    <button
+                      onClick={handleClearHistory}
+                      title="Clear all conversations"
+                      aria-label="Clear all conversations"
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#94a3b8",
+                        fontSize: "0.76rem",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        padding: "5px 8px",
+                        borderRadius: 6,
+                        transition: "all 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "#dc2626";
+                        e.currentTarget.style.background = "#fee2e2";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = "#94a3b8";
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      Clear all
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowHistory(false)}
+                    aria-label="Close chat history"
+                    style={{
+                      background: "#f8fafc",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "50%",
+                      width: 32,
+                      height: 32,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      color: "#64748b",
+                      transition: "all 0.15s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "#f1f5f9";
+                      e.currentTarget.style.color = "#0f172a";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "#f8fafc";
+                      e.currentTarget.style.color = "#64748b";
+                    }}
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
               </div>
 
-              <div style={{ flex: 1, overflowY: "auto", padding: "16px 12px" }}>
+              {/* Scrollable Conversation List */}
+              <div
+                style={{
+                  flex: 1,
+                  overflowY: "auto",
+                  padding: "14px 14px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
                 {history.length === 0 ? (
-                  <div style={{ textAlign: "center", marginTop: 60 }}>
-                    <div style={{ background: "#f8fafc", width: 48, height: 48, borderRadius: "50%", margin: "0 auto 16px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <MessageCircle size={20} color="#94a3b8" />
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "60px 20px",
+                      textAlign: "center",
+                      gap: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: "50%",
+                        background: "#f8fafc",
+                        border: "1px solid #e2e8f0",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "#94a3b8",
+                      }}
+                    >
+                      <MessageCircle size={20} />
                     </div>
-                    <p style={{ fontSize: "0.85rem", color: "#94a3b8" }}>No past conversations yet.</p>
+                    <div>
+                      <h3
+                        style={{
+                          margin: 0,
+                          fontSize: "0.90rem",
+                          fontWeight: 600,
+                          color: "#1e293b",
+                        }}
+                      >
+                        No conversations yet
+                      </h3>
+                      <p
+                        style={{
+                          margin: "4px 0 0",
+                          fontSize: "0.76rem",
+                          color: "#94a3b8",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        Start a new conversation with AIRA.
+                      </p>
+                    </div>
                   </div>
                 ) : (
-                  history.map((thread) => (
-                    <div
-                      key={thread.id}
-                      onClick={() => openThread(thread.id)}
-                      style={{
-                        position: "relative",
-                        padding: "14px 16px", borderRadius: 14, cursor: "pointer",
-                        background: chatId === thread.id ? "#f3f6ff" : "transparent",
-                        border: chatId === thread.id ? "1px solid rgba(59,130,246,0.1)" : "1px solid transparent",
-                        marginBottom: 8, transition: "all 0.2s",
-                        group: "history-item",
-                      }}
-                      className="history-item-container"
-                      onMouseEnter={(e) => { if (chatId !== thread.id) e.currentTarget.style.background = "#f8fafc"; }}
-                      onMouseLeave={(e) => { if (chatId !== thread.id) e.currentTarget.style.background = "transparent"; }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                        <div style={{ flex: 1, overflow: "hidden" }}>
-                          <p style={{ fontSize: "0.85rem", fontWeight: 600, color: chatId === thread.id ? "#3b82f6" : "#1a1a1a", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  history.map((thread) => {
+                    const isActive = chatId === thread.id;
+                    return (
+                      <div
+                        key={thread.id}
+                        onClick={() => openThread(thread.id)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Open conversation: ${thread.title || "New Conversation"}`}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openThread(thread.id);
+                          }
+                        }}
+                        className="history-item-container"
+                        style={{
+                          position: "relative",
+                          padding: "12px 14px",
+                          borderRadius: 10,
+                          cursor: "pointer",
+                          background: isActive ? "rgba(59, 130, 246, 0.06)" : "#ffffff",
+                          border: isActive
+                            ? "1px solid rgba(59, 130, 246, 0.22)"
+                            : "1px solid #f1f5f9",
+                          boxShadow: isActive
+                            ? "0 2px 6px rgba(59, 130, 246, 0.04)"
+                            : "0 1px 2px rgba(15, 23, 42, 0.02)",
+                          transition: "all 0.15s ease",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 10,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isActive) {
+                            e.currentTarget.style.background = "#f8fafc";
+                            e.currentTarget.style.borderColor = "#e2e8f0";
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive) {
+                            e.currentTarget.style.background = "#ffffff";
+                            e.currentTarget.style.borderColor = "#f1f5f9";
+                          }
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: "0.86rem",
+                              fontWeight: isActive ? 600 : 500,
+                              color: isActive ? "#2563eb" : "#1e293b",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              lineHeight: 1.35,
+                            }}
+                            title={thread.title || "New Conversation"}
+                          >
                             {thread.title || "New Conversation"}
                           </p>
-                          <span style={{ fontSize: "0.68rem", color: "#94a3b8", fontWeight: 500 }}>
-                            {formatChatTimestamp(thread.createdAt || thread.lastUpdated)}
-                          </span>
+                          <div
+                            style={{
+                              marginTop: 4,
+                              fontSize: "0.72rem",
+                              color: isActive ? "#60a5fa" : "#94a3b8",
+                              fontWeight: 450,
+                            }}
+                          >
+                            <span>{formatChatTimestamp(thread.createdAt || thread.lastUpdated)}</span>
+                          </div>
                         </div>
 
                         <button
                           onClick={(e) => deleteChatFromHistory(e, thread.id)}
                           className="delete-history-btn"
+                          aria-label={`Delete conversation ${thread.title || "New Conversation"}`}
+                          title="Delete conversation"
                           style={{
-                            background: "transparent", border: "none", padding: 4, cursor: "pointer",
-                            opacity: 0, transition: "all 0.2s", color: "#ef4444",
-                            marginTop: -2,
+                            background: "transparent",
+                            border: "none",
+                            padding: 6,
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            color: "#94a3b8",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                            transition: "all 0.15s ease",
+                            opacity: 0,
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.color = "#dc2626";
+                            e.currentTarget.style.background = "#fee2e2";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.color = "#94a3b8";
+                            e.currentTarget.style.background = "transparent";
                           }}
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={15} />
                         </button>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
-              <div style={{ padding: 16, borderTop: "1px solid #f1f5f9" }}>
+              {/* Sticky Footer */}
+              <div
+                style={{
+                  padding: "16px 20px",
+                  borderTop: "1px solid #f1f5f9",
+                  background: "#ffffff",
+                  flexShrink: 0,
+                }}
+              >
                 <button
-                  onClick={async () => {
-                    if (abortControllerRef.current) {
-                      abortControllerRef.current.abort();
-                      abortControllerRef.current = null;
-                    }
-                    activeRequestIdRef.current += 1;
-                    voice.cancelActiveSpeech();
-
-                    const newId = await createNewThread(user.uid);
-                    setChatId(newId);
-                    setMessages([]);
-                    messageHistoryRef.current = [];
+                  onClick={() => {
                     setShowHistory(false);
-                    voice.speak("Ready. What do you want to work on?");
+                    handleStartNewConversation();
                   }}
+                  aria-label="Start New Conversation"
                   style={{
-                    width: "100%", padding: "12px", borderRadius: 12,
+                    width: "100%",
+                    padding: "11px 16px",
+                    borderRadius: 10,
                     background: "linear-gradient(135deg, #6a8cff, #3b82f6)",
-                    color: "#fff", border: "none", fontSize: "0.85rem", fontWeight: 700,
-                    cursor: "pointer", boxShadow: "0 4px 14px rgba(106,140,255,0.3)",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                    color: "#ffffff",
+                    border: "none",
+                    fontSize: "0.86rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    boxShadow: "0 4px 14px rgba(59, 130, 246, 0.25)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-1px)";
+                    e.currentTarget.style.boxShadow = "0 6px 18px rgba(59, 130, 246, 0.32)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 4px 14px rgba(59, 130, 246, 0.25)";
                   }}
                 >
                   <Cpu size={16} />
-                  Start New Chat
+                  <span>Start New Conversation</span>
                 </button>
               </div>
             </motion.div>
@@ -1925,6 +2562,9 @@ export default function Agent({ user }) {
         .delete-history-btn:hover { background: #fee2e2 !important; border-radius: 6px; }
 
         @media (max-width: 768px) {
+          .delete-history-btn {
+            opacity: 0.65 !important;
+          }
           .chat-panel {
             display: none !important;
           }

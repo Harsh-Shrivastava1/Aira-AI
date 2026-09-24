@@ -1,4 +1,7 @@
 import admin from "firebase-admin";
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
 let isInitialized = false;
 
@@ -16,7 +19,7 @@ function getServiceAccountCredential() {
         jsonString = Buffer.from(trimmed, "base64").toString("utf-8");
       }
       const parsed = JSON.parse(jsonString);
-      return admin.credential.cert(parsed);
+      return cert(parsed);
     } catch (err) {
       console.warn("[Firebase Admin] Could not parse FIREBASE_SERVICE_ACCOUNT_KEY:", err.message);
     }
@@ -29,7 +32,7 @@ function getServiceAccountCredential() {
   if (clientEmail && privateKey) {
     try {
       const formattedKey = privateKey.replace(/\\n/g, "\n");
-      return admin.credential.cert({
+      return cert({
         projectId,
         clientEmail,
         privateKey: formattedKey,
@@ -46,27 +49,37 @@ function getServiceAccountCredential() {
  * Initialize Firebase Admin app singleton.
  */
 export function getFirebaseAdmin() {
-  if (admin.apps.length > 0) {
-    return admin.app();
-  }
-
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "aira-ai";
-  const credential = getServiceAccountCredential();
-
-  if (credential) {
-    admin.initializeApp({
-      credential,
-      projectId,
-    });
+  const apps = getApps();
+  let app;
+  if (apps.length > 0) {
+    app = apps[0];
   } else {
-    // Default initialization with projectId (allows ID token verification via Google public keys)
-    admin.initializeApp({
-      projectId,
-    });
+    const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "aira-ai";
+    const credential = getServiceAccountCredential();
+
+    if (credential) {
+      app = initializeApp({
+        credential,
+        projectId,
+      });
+    } else {
+      // Default initialization with projectId (allows ID token verification via Google public keys)
+      app = initializeApp({
+        projectId,
+      });
+    }
+    isInitialized = true;
   }
 
-  isInitialized = true;
-  return admin.app();
+  // Defensive compatibility helpers for v14 modular migration
+  if (!app.auth) {
+    app.auth = () => getAuth(app);
+  }
+  if (!app.firestore) {
+    app.firestore = () => getFirestore(app);
+  }
+
+  return app;
 }
 
 /**
@@ -107,8 +120,10 @@ function createInMemoryColRef(colPath) {
  * Get Firestore database instance.
  */
 export function getAdminDb() {
-  // If test mode is enabled, provide an in-memory document store matching Firestore API
-  if (process.env.AIRA_TEST_MODE === "true") {
+  // If test mode is enabled or running locally without service account credentials,
+  // provide an in-memory document store matching Firestore API
+  const hasCredential = Boolean(getServiceAccountCredential() || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (process.env.AIRA_TEST_MODE === "true" || !hasCredential) {
     return {
       collection: (colName) => createInMemoryColRef(colName),
       _clearTestStore: () => testFirestoreStore.clear(),
@@ -118,7 +133,7 @@ export function getAdminDb() {
 
   try {
     const app = getFirebaseAdmin();
-    return app.firestore();
+    return getFirestore(app);
   } catch (err) {
     console.warn("[Firebase Admin Firestore] Fallback to in-memory store:", err.message);
     return {
@@ -138,7 +153,7 @@ function extractTokenFromRequest(req) {
   // 1. Authorization header: "Bearer <token>"
   const authHeader = req.headers?.authorization || req.headers?.Authorization;
   if (authHeader && typeof authHeader === "string") {
-    const parts = authHeader.trim().split(" ");
+    const parts = authHeader.trim().split(/\s+/);
     if (parts.length === 2 && parts[0].toLowerCase() === "bearer") {
       return parts[1];
     }
@@ -186,7 +201,8 @@ export async function verifyUserToken(req) {
 
   try {
     const app = getFirebaseAdmin();
-    const decoded = await app.auth().verifyIdToken(token);
+    const auth = getAuth(app);
+    const decoded = await auth.verifyIdToken(token);
 
     if (!decoded || !decoded.uid) {
       return {

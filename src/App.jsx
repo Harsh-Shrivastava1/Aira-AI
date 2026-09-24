@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/config/firebase";
 import { syncUserDoc } from "./hooks/useFirestore";
+import { ToastProvider } from "./components/Toast";
 import Login from "./pages/Login";
 import Agent from "./pages/Agent";
 
@@ -34,13 +35,15 @@ function App() {
   }
 
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={user ? <Navigate to="/agent" replace /> : <Login />} />
-        <Route path="/agent" element={user ? <Agent user={user} /> : <Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Router>
+    <ToastProvider>
+      <Router>
+        <Routes>
+          <Route path="/" element={user ? <Navigate to="/agent" replace /> : <Login />} />
+          <Route path="/agent" element={user ? <Agent user={user} /> : <Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Router>
+    </ToastProvider>
   );
 }
 

@@ -3,6 +3,7 @@ import LoginOrb from "../components/LoginOrb";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mic, Sparkles, X, Brain, MessageCircle, Repeat2, Lightbulb, Zap, User2, Check, ChevronDown } from "lucide-react";
 import { auth, provider, signInWithPopup } from "@/config/firebase";
+import { useToast } from "../components/Toast";
 
 /* ─────────────────────────────────────────────────
    ABOUT MODAL — light glass, 3 sections
@@ -577,10 +578,24 @@ export default function Login() {
     return () => clearInterval(interval);
   }, []);
 
+  const { showToast } = useToast();
+
+  React.useEffect(() => {
+    if (sessionStorage.getItem("aira_just_signed_out")) {
+      sessionStorage.removeItem("aira_just_signed_out");
+      showToast({
+        title: "Signed Out",
+        message: "You've been signed out of AIRA.",
+        type: "info",
+      });
+    }
+  }, [showToast]);
+
   const handleGoogleLogin = async () => {
     setLoading(true);
     try {
       await signInWithPopup(auth, provider);
+      sessionStorage.setItem("aira_just_logged_in", "true");
     } catch (error) {
       if (error.code !== "auth/popup-closed-by-user" && error.code !== "auth/cancelled-popup-request") {
         alert("Login failed: " + error.message);

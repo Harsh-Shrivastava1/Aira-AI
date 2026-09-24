@@ -22,8 +22,13 @@ export default async function handler(req, res) {
 
     const { authUrl } = getGmailAuthUrl(authResult.user.uid);
 
-    // If client requested JSON or redirect=false, return { authUrl }
-    if (req.headers.accept?.includes("application/json") || req.query?.redirect === "false") {
+    // If client requested JSON, passed Authorization header, or requested redirect=false, return { authUrl } JSON
+    if (
+      req.headers?.authorization ||
+      req.headers?.Authorization ||
+      req.headers?.accept?.includes("application/json") ||
+      req.query?.redirect === "false"
+    ) {
       return res.status(200).json({ authUrl });
     }
 
