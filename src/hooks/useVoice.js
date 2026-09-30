@@ -139,6 +139,7 @@ export function useVoice(onUserSpeak, onInterrupt) {
     currentSpeechSessionId.current += 1; // Invalidate active speech chunk queue
     activeSpeechChunkRef.current = "";
     isSpeakingRef.current = false;
+    ttsFinishedTimestampRef.current = Date.now();
     if (clearMicBufferRef.current) {
       clearMicBufferRef.current();
     }

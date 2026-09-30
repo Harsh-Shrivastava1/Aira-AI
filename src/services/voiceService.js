@@ -98,7 +98,16 @@ export function isEchoTranscript(transcript, lastSpokenText = "", spokenChunks =
   // (e.g. AIRA said "Understood." or "Okay."). It must NEVER suppress genuine single-word answers
   // (e.g. "Java", "Python", "React", "Yes", "No") when answering questions.
   if (heardWords.length === 1) {
-    return cleanChunks.some((chunk) => chunk === cleanedHeard) || cleanFull === cleanedHeard;
+    if (cleanChunks.some((chunk) => chunk === cleanedHeard) || cleanFull === cleanedHeard) {
+      return true;
+    }
+    if (allSpokenWords.has(cleanedHeard)) {
+      return true;
+    }
+    if (cleanedHeard.length >= 4 && cleanFull.includes(cleanedHeard)) {
+      return true;
+    }
+    return false;
   }
 
   // Token overlap calculation against spoken text
