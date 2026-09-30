@@ -422,7 +422,7 @@ function AboutModal({ onClose, modalType }) {
               <User2 size={13} color="#94a3b8" />
               <span style={{ fontSize: "0.74rem", color: "#64748b" }}>
                 Built by{" "}
-                <a href="mailto:hshrivastava23032007@gmail.com" style={{ color: "#2563eb", fontWeight: 500, textDecoration: "none" }}>
+                <a href="https://www.linkedin.com/in/harsh-shrivastava-40b240313/" style={{ color: "#2563eb", fontWeight: 500, textDecoration: "none" }}>
                   Harsh Shrivastava
                 </a>
               </span>
