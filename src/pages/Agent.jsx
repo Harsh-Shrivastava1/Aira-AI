@@ -13,7 +13,7 @@ import { auth } from "../config/firebase";
 import { API_BASE } from "../config/api";
 import { classifyError, sanitizeLogDetails, ERROR_MESSAGES } from "../services/errorRecoveryService";
 import { useToast } from "../components/Toast";
-import { airaVoiceDebug } from "../services/voiceService";
+import { airaVoiceDebug, selectBestVoice } from "../services/voiceService";
 const voiceTrace = (event, data) => { if (import.meta.env.DEV) console.log("[VoiceTrace]", event, data); };
 const API = `${API_BASE}/api`;
 
@@ -1147,7 +1147,22 @@ export default function Agent({ user }) {
 
       addMessage("aira", reply, data.emailDraft);
       if (user?.uid && chatId) saveMessage(user.uid, chatId, "assistant", reply, "text", data.emailDraft);
-      voice.speak(reply);
+      
+      voice.stopListening();
+        
+      const handoffMessage = currentMode === "code" 
+        ? "I’ve got your code. Tap the orb whenever you’re ready, and we’ll go through it together."
+        : "I’ve got it. Tap the orb whenever you’re ready, and we can talk about it.";
+        
+      const utterance = new SpeechSynthesisUtterance(handoffMessage);
+      const allVoices = window.speechSynthesis.getVoices();
+      const bestVoice = selectBestVoice(allVoices);
+      if (bestVoice) {
+        utterance.voice = bestVoice;
+      }
+      
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
     } catch (err) {
       console.error("Paste analysis error:", err);
       addMessage("aira", "I couldn't process that content. Maybe try a smaller snippet?");
