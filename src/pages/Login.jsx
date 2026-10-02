@@ -576,7 +576,6 @@ export default function Login() {
       <div className="left-side" style={{
         flex: "1 1 60%", position: "relative",
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        borderRight: "1px solid rgba(0,0,0,0.03)",
         zIndex: 5,
       }}>
         {/* Faint light focus behind orb */}
@@ -632,9 +631,6 @@ export default function Login() {
       <div className="right-side" style={{
         flex: "1 1 40%", position: "relative", zIndex: 10,
         display: "flex", alignItems: "center", justifyContent: "center",
-        background: "rgba(255,255,255,0.2)",
-        backdropFilter: "blur(10px)",
-        WebkitBackdropFilter: "blur(10px)",
       }}>
         <motion.div
           initial={{ opacity: 0, x: 20 }}
