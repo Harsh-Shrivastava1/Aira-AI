@@ -1,6 +1,7 @@
 /**
  * Email Intent Detection & Query Extraction Helper for AIRA
  */
+import { createGroqChatCompletion } from "./groqClient.js";
 
 const EMAIL_KEYWORDS = /\b(email|emails|gmail|inbox|mailbox|unread)\b/i;
 const EXPLICIT_SEND_REGEX = /\b(send it|send the email|send this email|send that email|send this|okay send|ok send|go ahead and send|please send it|send the draft|send now)\b/i;
@@ -10,9 +11,14 @@ const SEARCH_READ_REGEX = /\b(check|read|search|any|did|what did|summarize|find|
 /**
  * Determine if a user utterance is related to email actions or inquiries.
  */
-export function isEmailRelated(text) {
+export function isEmailRelated(text, hasActiveDraft = false) {
   if (!text || typeof text !== "string") return false;
   const t = text.trim();
+  
+  if (hasActiveDraft && /^(yes|yes, send it|send it|go ahead|go ahead and send it|okay, send it|okay send it|alright, send it|confirm|confirmed|send the email|send it out)\b/i.test(t)) {
+    return true;
+  }
+
   return (
     EMAIL_KEYWORDS.test(t) ||
     EXPLICIT_SEND_REGEX.test(t) ||
@@ -28,13 +34,17 @@ export function isEmailRelated(text) {
  * - 'DRAFT'
  * - 'SEARCH_READ'
  */
-export function detectEmailIntent(text) {
+export function detectEmailIntent(text, hasActiveDraft = false) {
   if (!text) return null;
   const t = text.trim();
 
   // If user says "don't send", never treat as SEND_EXPLICIT
   if (/\b(don't send|dont send|do not send|never mind|cancel send)\b/i.test(t)) {
     return "DRAFT";
+  }
+
+  if (hasActiveDraft && /^(yes|yes, send it|send it|go ahead|go ahead and send it|okay, send it|okay send it|alright, send it|confirm|confirmed|send the email|send it out)\b/i.test(t)) {
+    return "SEND_EXPLICIT";
   }
 
   // Explicit send trigger
@@ -143,4 +153,83 @@ export function findRecentEmailDraft(messageHistory = []) {
 export function isValidEmailAddress(addr) {
   if (!addr || typeof addr !== "string") return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr.trim()) || /<[^\s@]+@[^\s@]+\.[^\s@]+>/.test(addr.trim());
+}
+
+/**
+ * Parses user's Gmail intent using LLM and returns structured parameters.
+ */
+export async function parseGmailIntentAsync(latestUserTurn, messageHistory = []) {
+  const systemPrompt = `You are an internal JSON-only router for Gmail queries.
+Parse the user's intent into ONE of three actions: "search", "read_email", or "read_thread".
+
+Rules:
+1. "search": User is looking for emails generally (e.g. "Find emails from Amazon", "Show my last 5 emails").
+2. "read_email": User wants to read a specific email (e.g. "Read the latest one", "Read the email from Google").
+3. "read_thread": User wants to read a full conversation/thread (e.g. "Read the whole thread", "What is the conversation about?").
+
+Determine parameters to build a Gmail search string later:
+- sender: (string or null) e.g., "Amazon"
+- subject: (string or null) e.g., "internship"
+- isUnread: (boolean or null)
+- hasAttachment: (boolean or null)
+- timeframeDays: (number or null) e.g. "last week" -> 7
+- limit: (number) default 5
+
+Output strictly JSON:
+{
+  "action": "search" | "read_email" | "read_thread",
+  "searchParams": {
+    "sender": null,
+    "subject": null,
+    "isUnread": null,
+    "hasAttachment": null,
+    "timeframeDays": null,
+    "limit": 5
+  },
+  "targetRef": "latest" | "number" | null // if they say "read the 3rd one" -> "3", "read the latest" -> "latest"
+}`;
+
+  // Grab last 5 messages for context if they say "Read the latest one"
+  const recentContext = (messageHistory || []).slice(-5).map(m => ({ role: m.role, content: m.content }));
+  
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...recentContext,
+    { role: "user", content: latestUserTurn }
+  ];
+
+  try {
+    const { content } = await createGroqChatCompletion(messages, {
+      response_format: { type: "json_object" },
+      temperature: 0.1,
+      max_tokens: 300
+    });
+    
+    return JSON.parse(content);
+  } catch (err) {
+    console.error("[EmailHelper] LLM Intent Parse Error:", err.message);
+    return { action: "search", searchParams: { limit: 5 } };
+  }
+}
+
+/**
+ * Builds a Gmail API search query string from structured parameters.
+ */
+export function buildGmailQuery(searchParams) {
+  if (!searchParams) return "";
+  const parts = [];
+
+  if (searchParams.sender) parts.push(`from:${searchParams.sender}`);
+  if (searchParams.subject) parts.push(`subject:${searchParams.subject}`);
+  if (searchParams.isUnread === true) parts.push("is:unread");
+  if (searchParams.isUnread === false) parts.push("is:read");
+  if (searchParams.hasAttachment === true) parts.push("has:attachment");
+  if (searchParams.timeframeDays) parts.push(`newer_than:${searchParams.timeframeDays}d`);
+
+  // Default to recent if no other criteria
+  if (parts.length === 0) {
+    parts.push("newer_than:14d");
+  }
+
+  return parts.join(" ");
 }

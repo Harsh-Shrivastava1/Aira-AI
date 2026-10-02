@@ -1,8 +1,8 @@
 import { createGroqChatCompletion } from "./_lib/groqClient.js";
 import { getCategoryProfileMemory } from "./_lib/userProfile.js";
 import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./_lib/rateLimiter.js";
-import { getGmailStatus, searchEmails, sendEmail, replyToThread } from "./_lib/gmailService.js";
-import { isEmailRelated, detectEmailIntent, extractGmailSearchQuery, findRecentEmailDraft, isValidEmailAddress } from "./_lib/emailHelper.js";
+import { getGmailStatus, searchEmails, sendEmail, replyToThread, getMessage, getThread } from "./_lib/gmailService.js";
+import { isEmailRelated, detectEmailIntent, parseGmailIntentAsync, buildGmailQuery, findRecentEmailDraft, isValidEmailAddress } from "./_lib/emailHelper.js";
 import { verifyUserToken } from "./_lib/firebaseAdmin.js";
 import {
   retrieveRelevantMemories,
@@ -67,8 +67,37 @@ export default async function handler(req, res) {
 
     // 0. Email / Gmail Intent Handling
     let emailContextBlock = "";
-    if (isEmailRelated(latestUserTurn)) {
-      const emailIntent = detectEmailIntent(latestUserTurn);
+
+    const previousAssistantTurn = (messageHistory || [])
+      .filter((m) => m.role === "aira" || m.role === "assistant")
+      .slice(-1)[0]?.content || "";
+    const isAwaitingConfirmation = previousAssistantTurn.includes("Before I send it, please double-check the recipient");
+    const currentDraftForConfirm = (activeDraft && activeDraft.body) ? activeDraft : findRecentEmailDraft(messageHistory);
+
+    let isConfirmedSend = false;
+    let isCancelledSend = false;
+    if (isAwaitingConfirmation && currentDraftForConfirm) {
+      const t = latestUserTurn.trim().toLowerCase();
+      // Only match clear explicit send affirmations, not broad words
+      if (/^(yes|yes, send it|send it|go ahead|go ahead and send it|okay, send it|okay send it|alright, send it|confirm|confirmed|send the email|send it out)\b/.test(t) || t === "send" || t === "yes") {
+        isConfirmedSend = true;
+      } else if (/^(no|cancel|stop|don't|dont|never mind|wait)\b/.test(t)) {
+        isCancelledSend = true;
+      }
+    }
+
+    if (isCancelledSend) {
+      return res.status(200).json({
+        reply: "Okay, I won't send it. Your draft is still here.",
+        intent: "chat",
+        scenario: "normal",
+        emailDraft: currentDraftForConfirm
+      });
+    }
+
+    const hasActiveDraft = !!currentDraftForConfirm;
+    if (isEmailRelated(latestUserTurn, hasActiveDraft) || isConfirmedSend) {
+      const emailIntent = isConfirmedSend ? "SEND_EXPLICIT" : detectEmailIntent(latestUserTurn, hasActiveDraft);
 
       // Branch 1: Explicit Send Protection & Execution
       if (emailIntent === "SEND_EXPLICIT") {
@@ -116,10 +145,22 @@ export default async function handler(req, res) {
           });
         }
 
+        if (!isAwaitingConfirmation) {
+          return res.status(200).json({
+            reply: `Before I send it, please double-check the recipient: ${recipient}. The subject is ${currentDraft.subject || "(no subject)"}. Do you want me to send this email?`,
+            intent: "chat",
+            scenario: "normal",
+            emailDraft: currentDraft
+          });
+        }
+
         try {
-          if (currentDraft.threadId) {
+          const tId = currentDraft.threadId;
+          const isValidThreadId = tId && typeof tId === "string" && tId.trim() !== "" && !["...", "undefined", "null", "none"].includes(tId.trim().toLowerCase());
+
+          if (isValidThreadId) {
             await replyToThread(verifiedUid, {
-              threadId: currentDraft.threadId,
+              threadId: tId,
               to: recipient,
               subject: currentDraft.subject,
               body: currentDraft.body
@@ -133,7 +174,7 @@ export default async function handler(req, res) {
           }
 
           return res.status(200).json({
-            reply: `Sent. Your email to ${recipient} with subject "${currentDraft.subject || "No Subject"}" was sent successfully.`,
+            reply: `Email sent successfully to ${recipient}.`,
             intent: "chat",
             scenario: "normal",
             emailDraft: null,
@@ -171,39 +212,86 @@ export default async function handler(req, res) {
           });
         }
         try {
-          const query = extractGmailSearchQuery(latestUserTurn);
-          const messages = await searchEmails(verifiedUid, query, 3);
+          const intentParams = await parseGmailIntentAsync(latestUserTurn, messageHistory);
+          const action = intentParams.action || "search";
+          const searchParams = intentParams.searchParams || {};
+          const targetRef = intentParams.targetRef;
+          
+          const query = buildGmailQuery(searchParams);
+          const limit = searchParams.limit || 5;
+          const messages = await searchEmails(verifiedUid, query, limit);
 
           if (messages.length === 0) {
-            emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===\nQuery: "${query}"\nNo matching emails found.\nInstruction: Tell the user conversationally that you checked their Gmail and found no matching emails for that query.`;
+            emailContextBlock = `\n\n=== GMAIL RESULTS ===\nCould not find any emails matching the request.\nInstruction: Tell the user conversationally that no matching emails were found.`;
           } else {
-            const formattedMessages = messages.map((m, idx) => `
+            let targetIndex = 0;
+            let ambiguous = false;
+
+            if (targetRef === "latest") {
+              targetIndex = 0;
+            } else if (targetRef && !isNaN(parseInt(targetRef))) {
+              targetIndex = Math.max(0, parseInt(targetRef) - 1);
+            } else if ((action === "read_email" || action === "read_thread") && messages.length > 1) {
+              ambiguous = true;
+            }
+
+            if (targetIndex >= messages.length) targetIndex = 0;
+            
+            if (ambiguous) {
+              const formattedMessages = messages.map((m, idx) => `${idx + 1}. From: ${m.from} | Subject: ${m.subject} | Date: ${m.date}`).join("\n");
+              emailContextBlock = `\n\n=== GMAIL AMBIGUOUS SEARCH ===\nFound ${messages.length} matching emails.\n${formattedMessages}\nInstruction: You found multiple emails that match. Ask the user WHICH ONE they want you to read by listing the options.`;
+            } else if (action === "read_email") {
+              const targetMsg = messages[targetIndex];
+              const fullMsg = await getMessage(verifiedUid, targetMsg.id);
+              
+              emailContextBlock = `\n\n=== GMAIL: READ EMAIL ===
+From: ${fullMsg.from}
+To: ${fullMsg.to}
+Subject: ${fullMsg.subject}
+Date: ${fullMsg.date}
+Attachments: ${fullMsg.hasAttachments ? fullMsg.attachments.map(a => a.filename).join(", ") : "None"}
+
+[EMAIL CONTENT BEGIN]
+${fullMsg.cleanBody || fullMsg.body || "(Empty Body)"}
+[EMAIL CONTENT END]
+
+Instruction: Read or summarize this email to the user. Be concise.`;
+            } else if (action === "read_thread") {
+              const targetMsg = messages[targetIndex];
+              const threadInfo = await getThread(verifiedUid, targetMsg.threadId);
+              
+              const threadStr = threadInfo.messages.map((m, idx) => `
 Message ${idx + 1}:
-- From: ${m.from}
-- To: ${m.to}
-- Subject: ${m.subject}
-- Date: ${m.date}
-- Thread ID: ${m.threadId}
-- Message ID: ${m.messageId}
-- Snippet: ${m.snippet}
-- Content: ${m.body || m.snippet}
+From: ${m.from}
+Date: ${m.date}
+Attachments: ${m.hasAttachments ? 'Yes' : 'No'}
+Content: ${m.cleanBody || m.body || "(Empty)"}
+`).join("\n---\n");
+
+              emailContextBlock = `\n\n=== GMAIL: CONVERSATION THREAD ===
+Subject: ${messages[targetIndex].subject}
+Total Messages: ${threadInfo.messages.length}
+
+${threadStr}
+
+Instruction: Summarize or answer questions based on this conversation history. Be concise and natural.`;
+            } else {
+              const formattedMessages = messages.map((m, idx) => `
+Message ${idx + 1}:
+From: ${m.from}
+Subject: ${m.subject}
+Date: ${m.date}
+Snippet: ${m.snippet}
 `).join("\n");
 
-            emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===
-Query: "${query}"
-Retrieved ${messages.length} email(s):
+              emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS ===
 ${formattedMessages}
-==================================================
-CRITICAL INSTRUCTIONS FOR GMAIL CONTEXT:
-- Answer the user's specific question directly and concisely using the email details above.
-- Mention who sent the email, when, and the key points.
-- If asked to summarize, give a clean 2-3 sentence conversational summary suitable for voice.
-- Do NOT fabricate email contents not present in the search results.
-- Do NOT output an emailDraft unless explicitly asked to draft or compose a reply.`;
+Instruction: Answer the user's question using the search results above. Do NOT fabricate content.`;
+            }
           }
         } catch (searchErr) {
           console.warn(`[Gmail Search Error] user ${verifiedUid}:`, searchErr.message);
-          emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS (CURRENT REQUEST ONLY) ===\nCould not query Gmail: ${searchErr.message}.\nInstruction: Inform the user that there was a temporary issue checking their emails.`;
+          emailContextBlock = `\n\n=== GMAIL SEARCH RESULTS ===\nCould not query Gmail: ${searchErr.message}.\nInstruction: Inform the user that there was a temporary issue checking their emails.`;
         }
       }
     }
@@ -365,10 +453,16 @@ Always return valid JSON in exactly this structure:
 }
 
 CRITICAL EMAIL RULES:
-1. Provide "emailDraft" if the user asked to draft/compose an email OR if an active email draft is being refined/edited (e.g. "make it more professional", "make it shorter", "change the subject", "change tomorrow to Monday"). Otherwise set "emailDraft" to null.
-2. When refining an active draft, keep unchanged fields from the active draft and update only what the user requested.
-3. DRAFTS ARE NEVER AUTOMATICALLY SENT. When generating an emailDraft, always explain conversationally that the draft is ready for their review and let them know they can say "Send it" when ready.
-4. If drafting a reply to a previous email from search results, populate "threadId" with the matching thread ID and set "to" to the sender's email address.
+1. Provide "emailDraft" if the user asked to draft/compose an email OR if an active email draft is being refined/edited. Otherwise set "emailDraft" to null.
+2. SENDING STYLE (CRITICAL): When the user asks to draft/write an email, you MUST determine if you should write it as the user themselves, or on their behalf as AIRA.
+   - If the user explicitly states the style, just draft the email.
+   - If the user does NOT specify, DO NOT generate the email draft yet. Instead, ask them: "Do you want me to write it as if you are sending it yourself, or should I write it on your behalf as AIRA?"
+   - SEND AS USER: Normal first-person.
+   - ON BEHALF OF USER: Begin with "Hello,\n\nI'm AIRA, writing on behalf of Harsh Shrivastava." and end with "Regards,\nAIRA\nOn behalf of Harsh Shrivastava". Use this ONLY if explicitly requested.
+3. EMAIL CONTENT QUALITY: When drafting, generate a properly developed professional email (roughly 2–5 paragraphs depending on the request). Include a greeting, context, purpose, relevant details, and a polite closing. Do NOT invent facts, dates, attachments, commitments, or personal details not provided by the user. Do NOT generate an unnecessarily short 1-2 sentence email when more context is available.
+4. When refining an active draft, keep unchanged fields from the active draft and update only what the user requested.
+5. DRAFTS ARE NEVER AUTOMATICALLY SENT. When generating an emailDraft, explain conversationally that the draft is ready for review and they can say "Send it" when ready.
+6. If drafting a reply to a previous email from search results, populate "threadId" with the matching thread ID and set "to" to the sender's email address.
 
 ========================
 END
@@ -400,7 +494,10 @@ END
       const subject = (content.emailDraft.subject || activeDraft?.subject || "").trim();
       const body = (content.emailDraft.body || activeDraft?.body || "").trim();
       const to = content.emailDraft.to ? content.emailDraft.to.trim() : (activeDraft?.to || "");
-      const threadId = content.emailDraft.threadId ? content.emailDraft.threadId.trim() : (activeDraft?.threadId || null);
+      let threadId = content.emailDraft.threadId ? content.emailDraft.threadId.trim() : (activeDraft?.threadId || null);
+      if (threadId && ["...", "undefined", "null", "none", ""].includes(threadId.toLowerCase())) {
+        threadId = null;
+      }
       if (subject !== "..." && body !== "..." && (subject.length > 2 || body.length > 5)) {
         finalEmailDraft = { to, subject, body, threadId };
       }
@@ -416,6 +513,8 @@ END
         })
         .catch(() => {});
     }
+
+
 
     return res.status(200).json({
       reply: content.reply || "Something went wrong on my end. Try again?",

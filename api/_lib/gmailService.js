@@ -373,6 +373,56 @@ function extractBodyFromPayload(payload) {
 }
 
 /**
+ * Extract attachment metadata from MIME parts.
+ */
+function extractAttachments(payload) {
+  const attachments = [];
+  if (!payload || !payload.parts) return attachments;
+
+  function traverse(parts) {
+    for (const part of parts) {
+      if (part.filename && part.filename.trim() !== "") {
+        attachments.push({
+          filename: part.filename,
+          mimeType: part.mimeType,
+          size: part.body?.size || 0,
+          attachmentId: part.body?.attachmentId || null
+        });
+      }
+      if (part.parts) {
+        traverse(part.parts);
+      }
+    }
+  }
+
+  traverse(payload.parts);
+  return attachments;
+}
+
+/**
+ * Clean email body by removing reply blocks.
+ */
+function createCleanBody(bodyText) {
+  if (!bodyText) return "";
+  const delimiters = [
+    /\bOn\s.+wrote:/i,
+    /\bFrom:\s.+Sent:/i,
+    /-----Original Message-----/i,
+    /_{10,}/,
+    /-{10,}/,
+  ];
+
+  let cleaned = bodyText;
+  for (const delimiter of delimiters) {
+    const parts = cleaned.split(delimiter);
+    if (parts.length > 1) {
+      cleaned = parts[0];
+    }
+  }
+  return cleaned.trim();
+}
+
+/**
  * Extract headers into a clean lookup map.
  */
 function extractHeaders(payload) {
@@ -416,13 +466,15 @@ export async function searchEmails(uid, query = "", maxResults = 5) {
         const details = await gmail.users.messages.get({
           userId: "me",
           id: msg.id,
-          format: "full",
+          format: "metadata",
+          metadataHeaders: ['From', 'To', 'Subject', 'Date', 'Message-ID']
         });
 
         const payload = details.data.payload || {};
         const headers = extractHeaders(payload);
-        const bodyText = extractBodyFromPayload(payload);
-
+        
+        // Note: For search results, we do not fetch the full body to save time and bandwidth.
+        // The snippet is sufficient. Full reading will explicitly call getMessage.
         return {
           id: msg.id,
           threadId: msg.threadId,
@@ -432,7 +484,6 @@ export async function searchEmails(uid, query = "", maxResults = 5) {
           subject: headers["subject"] || "(No Subject)",
           date: headers["date"] || "",
           messageId: headers["message-id"] || "",
-          body: bodyText.substring(0, 1200),
         };
       } catch (err) {
         console.warn(`[Gmail] Could not load message ${msg.id} for user ${uid}:`, err.message);
@@ -463,7 +514,9 @@ export async function getMessage(uid, messageId) {
 
   const payload = response.data.payload || {};
   const headers = extractHeaders(payload);
-  const body = extractBodyFromPayload(payload);
+  const bodyText = extractBodyFromPayload(payload);
+  const cleanBody = createCleanBody(bodyText);
+  const attachments = extractAttachments(payload);
 
   return {
     id: response.data.id,
@@ -476,7 +529,10 @@ export async function getMessage(uid, messageId) {
     messageId: headers["message-id"] || "",
     inReplyTo: headers["in-reply-to"] || "",
     references: headers["references"] || "",
-    body: body.substring(0, 2000),
+    body: bodyText,
+    cleanBody: cleanBody,
+    attachments,
+    hasAttachments: attachments.length > 0
   };
 }
 
@@ -500,7 +556,9 @@ export async function getThread(uid, threadId) {
   const messages = (response.data.messages || []).map((msg) => {
     const payload = msg.payload || {};
     const headers = extractHeaders(payload);
-    const body = extractBodyFromPayload(payload);
+    const bodyText = extractBodyFromPayload(payload);
+    const cleanBody = createCleanBody(bodyText);
+    const attachments = extractAttachments(payload);
 
     return {
       id: msg.id,
@@ -511,7 +569,10 @@ export async function getThread(uid, threadId) {
       subject: headers["subject"] || "(No Subject)",
       date: headers["date"] || "",
       messageId: headers["message-id"] || "",
-      body: body.substring(0, 1000),
+      body: bodyText,
+      cleanBody: cleanBody,
+      attachments,
+      hasAttachments: attachments.length > 0
     };
   });
 

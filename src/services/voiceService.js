@@ -93,6 +93,11 @@ export function isEchoTranscript(transcript, lastSpokenText = "", spokenChunks =
   const heardWords = cleanedHeard.split(" ").filter(Boolean);
   if (heardWords.length === 0) return true;
 
+  // Token overlap calculation against spoken text
+  const allSpokenWords = new Set(
+    cleanFull.split(" ").concat(cleanChunks.flatMap((c) => c.split(" "))).filter(Boolean)
+  );
+
   // Single-word transcript:
   // A single word is only an echo if the assistant's chunk was literally just that single word
   // (e.g. AIRA said "Understood." or "Okay."). It must NEVER suppress genuine single-word answers
@@ -109,11 +114,6 @@ export function isEchoTranscript(transcript, lastSpokenText = "", spokenChunks =
     }
     return false;
   }
-
-  // Token overlap calculation against spoken text
-  const allSpokenWords = new Set(
-    cleanFull.split(" ").concat(cleanChunks.flatMap((c) => c.split(" "))).filter(Boolean)
-  );
 
   let matchCount = 0;
   for (const word of heardWords) {
